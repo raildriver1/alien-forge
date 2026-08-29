@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <RootNamespace>AlienForge.Core</RootNamespace>
+    <AssemblyName>AlienForge.Core</AssemblyName>
+    <!-- Pulled in for one reason: WIC (System.Windows.Media.Imaging) is the only
+         managed route to Microsoft's BC7 and BC6H decoders. -->
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="CathodeLib" Version="0.12.2" />
+  </ItemGroup>
+
+</Project>

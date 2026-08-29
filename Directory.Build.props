@@ -1,0 +1,26 @@
+<Project>
+
+  <PropertyGroup>
+    <!-- Windows-only on purpose: the game is Windows, and targeting
+         net9.0-windows gives us Microsoft.Win32.Registry for Steam detection
+         without pulling an extra package. -->
+    <TargetFramework>net9.0-windows</TargetFramework>
+    <LangVersion>latest</LangVersion>
+    <Nullable>enable</Nullable>
+    <!-- Off on purpose. Enabling UseWPF stopped the SDK from emitting the implicit
+         using directives, which silently removed System.IO from every file. Each
+         project declares its own global usings instead, so the set is explicit and
+         does not depend on SDK behaviour. -->
+    <ImplicitUsings>disable</ImplicitUsings>
+    <!-- Must stay off. With InvariantGlobalization=true the WPF text stack fails on
+         the first TextBlock measure: MS.Internal.FontCache.MajorLanguages needs real
+         culture and script/language data, and its type initializer throws without it.
+         The window then dies during layout. -->
+    <InvariantGlobalization>false</InvariantGlobalization>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <GenerateDocumentationFile>false</GenerateDocumentationFile>
+    <Version>0.1.0</Version>
+    <Authors>AlienForge</Authors>
+  </PropertyGroup>
+
+</Project>

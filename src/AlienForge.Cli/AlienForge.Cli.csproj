@@ -1,0 +1,15 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>Exe</OutputType>
+    <RootNamespace>AlienForge.Cli</RootNamespace>
+    <AssemblyName>alienforge</AssemblyName>
+    <!-- Needed because Core reaches WIC through the WPF imaging assemblies. -->
+    <UseWPF>true</UseWPF>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AlienForge.Core\AlienForge.Core.csproj" />
+  </ItemGroup>
+
+</Project>

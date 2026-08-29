@@ -1,0 +1,37 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <UseWPF>true</UseWPF>
+    <RootNamespace>AlienForge.App</RootNamespace>
+    <AssemblyName>AlienForge</AssemblyName>
+    <ApplicationManifest>app.manifest</ApplicationManifest>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\AlienForge.Core\AlienForge.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    hkdump.exe is the Havok unpacker the animation viewer drives. HavokDump looks for
+    it next to the executable first, so it is copied into every build and publish
+    output. Missing is not an error: the rest of the tool works without it, only
+    animation playback needs it.
+  -->
+  <PropertyGroup>
+    <HavokDumperPath Condition="'$(HavokDumperPath)' == ''">$(USERPROFILE)\Desktop\_havoklib\build\hkdump_bin\hkdump.exe</HavokDumperPath>
+  </PropertyGroup>
+
+  <Target Name="CopyHavokDumperToOutput" AfterTargets="Build"
+          Condition="Exists('$(HavokDumperPath)')">
+    <Copy SourceFiles="$(HavokDumperPath)" DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
+  <Target Name="CopyHavokDumperToPublish" AfterTargets="Publish"
+          Condition="Exists('$(HavokDumperPath)')">
+    <Copy SourceFiles="$(HavokDumperPath)" DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
+</Project>

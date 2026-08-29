@@ -1,0 +1,12 @@
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\bin\Debug\net9.0-windows\AlienForge.Core.deps.json
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\bin\Debug\net9.0-windows\AlienForge.Core.dll
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\bin\Debug\net9.0-windows\AlienForge.Core.pdb
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.csproj.AssemblyReference.cache
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.GeneratedMSBuildEditorConfig.editorconfig
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.AssemblyInfoInputs.cache
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.AssemblyInfo.cs
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.csproj.CoreCompileInputs.cache
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.dll
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\refint\AlienForge.Core.dll
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.pdb
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\ref\AlienForge.Core.dll

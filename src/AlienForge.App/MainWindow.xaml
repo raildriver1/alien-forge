@@ -1,0 +1,384 @@
+<Window x:Class="AlienForge.App.MainWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        xmlns:local="clr-namespace:AlienForge.App"
+        Title="{Binding [APP_TITLE], Source={x:Static local:Loc.Current}}"
+        Width="1380" Height="880" MinWidth="960" MinHeight="640"
+        Background="{StaticResource Bg}"
+        TextOptions.TextFormattingMode="Display">
+
+  <Grid Margin="8">
+    <Grid.RowDefinitions>
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="Auto" />
+      <RowDefinition Height="*" />
+      <RowDefinition Height="Auto" />
+    </Grid.RowDefinitions>
+
+    <!-- ======================================================== menu bar -->
+    <Menu Grid.Row="0" Margin="0,0,0,6">
+      <MenuItem Header="{Binding [MENU_FILE], Source={x:Static local:Loc.Current}}">
+        <MenuItem Header="{Binding [MENU_DETECT], Source={x:Static local:Loc.Current}}"
+                  Click="OnDetectGame" />
+        <MenuItem Header="{Binding [MENU_OPEN_GAME], Source={x:Static local:Loc.Current}}"
+                  Click="OnBrowseGame" />
+        <Separator />
+        <MenuItem Header="{Binding [MENU_RELOAD], Source={x:Static local:Loc.Current}}"
+                  Click="OnLoadLevel" />
+        <Separator />
+        <MenuItem Header="{Binding [MENU_EXIT], Source={x:Static local:Loc.Current}}"
+                  Click="OnExit" />
+      </MenuItem>
+
+      <MenuItem Header="{Binding [MENU_EXPORT], Source={x:Static local:Loc.Current}}">
+        <MenuItem Header="{Binding [MENU_EXPORT_MODEL], Source={x:Static local:Loc.Current}}"
+                  Click="OnExportModel" />
+        <MenuItem Header="{Binding [MENU_EXPORT_TEXTURES], Source={x:Static local:Loc.Current}}"
+                  Click="OnExportModelTextures" />
+        <MenuItem Header="{Binding [MENU_EXPORT_TEXTURE], Source={x:Static local:Loc.Current}}"
+                  Click="OnExportCurrentTexture" />
+        <Separator />
+        <MenuItem Header="{Binding [MENU_EXPORT_LEVEL], Source={x:Static local:Loc.Current}}"
+                  Click="OnExportLevel" />
+      </MenuItem>
+
+      <MenuItem Header="{Binding [MENU_VIEW], Source={x:Static local:Loc.Current}}">
+        <MenuItem x:Name="MenuShowCollision" IsCheckable="True"
+                  Header="{Binding [MENU_SHOW_COLLISION], Source={x:Static local:Loc.Current}}"
+                  Click="OnToggleCollision" />
+        <MenuItem Header="{Binding [MENU_RESET_CAMERA], Source={x:Static local:Loc.Current}}"
+                  Click="OnResetCamera" />
+      </MenuItem>
+
+      <MenuItem Header="{Binding [MENU_LANGUAGE], Source={x:Static local:Loc.Current}}">
+        <MenuItem Header="{Binding [MENU_RUSSIAN], Source={x:Static local:Loc.Current}}"
+                  IsCheckable="True"
+                  IsChecked="{Binding IsRussian, Source={x:Static local:Loc.Current}, Mode=OneWay}"
+                  Click="OnLanguageRussian" />
+        <MenuItem Header="{Binding [MENU_ENGLISH], Source={x:Static local:Loc.Current}}"
+                  IsCheckable="True"
+                  IsChecked="{Binding IsEnglish, Source={x:Static local:Loc.Current}, Mode=OneWay}"
+                  Click="OnLanguageEnglish" />
+      </MenuItem>
+
+      <MenuItem Header="{Binding [MENU_HELP], Source={x:Static local:Loc.Current}}">
+        <MenuItem Header="{Binding [MENU_ABOUT], Source={x:Static local:Loc.Current}}"
+                  Click="OnAbout" />
+      </MenuItem>
+    </Menu>
+
+    <!-- ========================================================= toolbar -->
+    <Border Grid.Row="1" Style="{StaticResource Card}" Padding="10,8" Margin="0,0,0,8">
+      <Grid>
+        <Grid.ColumnDefinitions>
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="*" MinWidth="180" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="180" />
+          <ColumnDefinition Width="Auto" />
+          <ColumnDefinition Width="170" />
+          <ColumnDefinition Width="Auto" />
+        </Grid.ColumnDefinitions>
+
+        <TextBlock Grid.Column="0" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                   Margin="0,0,8,0"
+                   Text="{Binding [GAME_PATH], Source={x:Static local:Loc.Current}}" />
+        <TextBox Grid.Column="1" x:Name="GamePathBox" VerticalAlignment="Center" />
+        <Button Grid.Column="2" Margin="6,0,14,0" Click="OnBrowseGame"
+                Content="{Binding [BROWSE], Source={x:Static local:Loc.Current}}" />
+
+        <TextBlock Grid.Column="3" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                   Margin="0,0,8,0"
+                   Text="{Binding [LEVEL], Source={x:Static local:Loc.Current}}" />
+        <ComboBox Grid.Column="4" x:Name="LevelBox" VerticalAlignment="Center"
+                  SelectionChanged="OnLevelChanged" />
+
+        <TextBlock Grid.Column="5" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                   Margin="14,0,8,0"
+                   Text="{Binding [FILTER], Source={x:Static local:Loc.Current}}" />
+        <TextBox Grid.Column="6" x:Name="FilterBox" VerticalAlignment="Center"
+                 KeyDown="OnFilterKeyDown" />
+
+        <Button Grid.Column="7" Style="{StaticResource Primary}" Margin="10,0,0,0"
+                Click="OnLoadLevel" x:Name="LoadButton"
+                Content="{Binding [LOAD], Source={x:Static local:Loc.Current}}" />
+      </Grid>
+    </Border>
+
+    <!-- ========================================================= content -->
+    <Grid Grid.Row="2">
+      <Grid.ColumnDefinitions>
+        <ColumnDefinition Width="320" MinWidth="200" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="*" MinWidth="360" />
+        <ColumnDefinition Width="Auto" />
+        <ColumnDefinition Width="340" MinWidth="200" />
+      </Grid.ColumnDefinitions>
+
+      <!-- archive tree -->
+      <Border Grid.Column="0" Style="{StaticResource Card}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+          <TextBlock Grid.Row="0" Style="{StaticResource Heading}"
+                     Text="{Binding [PANE_ARCHIVE], Source={x:Static local:Loc.Current}}" />
+          <TreeView Grid.Row="1" x:Name="ArchiveTree" Margin="4,0,4,4"
+                    SelectedItemChanged="OnArchiveSelected"
+                    TreeViewItem.Expanded="OnTreeExpanded">
+            <TreeView.ItemTemplate>
+              <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="{Binding Tag}" Style="{StaticResource Mono}"
+                             Foreground="{StaticResource AccentDim}" MinWidth="46" />
+                  <TextBlock Text="{Binding Name}" />
+                  <TextBlock Text="{Binding Suffix}" Style="{StaticResource Dim}"
+                             Margin="8,0,0,0" />
+                </StackPanel>
+              </HierarchicalDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+        </Grid>
+      </Border>
+
+      <GridSplitter Grid.Column="1" HorizontalAlignment="Stretch" />
+
+      <!-- preview -->
+      <Border Grid.Column="2" Style="{StaticResource Card}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+
+          <TabControl Grid.Row="0" x:Name="PreviewTabs" Margin="6,4,6,0">
+            <TabItem Header="{Binding [TAB_MAP], Source={x:Static local:Loc.Current}}" />
+            <TabItem Header="{Binding [TAB_MODEL], Source={x:Static local:Loc.Current}}" />
+            <TabItem Header="{Binding [TAB_TEXTURE], Source={x:Static local:Loc.Current}}" />
+            <TabItem Header="{Binding [TAB_ANIMATION], Source={x:Static local:Loc.Current}}" />
+            <TabItem Header="{Binding [TAB_INFO], Source={x:Static local:Loc.Current}}" />
+          </TabControl>
+
+          <Grid Grid.Row="1" Margin="6,6,6,6">
+
+            <!-- map pane: model in the middle, what it depends on fanning out -->
+            <Grid x:Name="MapPaneHost">
+              <local:AssetMapView x:Name="MapView" />
+              <TextBlock x:Name="MapEmpty" HorizontalAlignment="Center"
+                         VerticalAlignment="Center" Style="{StaticResource Dim}"
+                         Text="{Binding [MAP_PICK], Source={x:Static local:Loc.Current}}" />
+              <TextBlock VerticalAlignment="Bottom" HorizontalAlignment="Center" Margin="10"
+                         Style="{StaticResource Dim}"
+                         Text="{Binding [MAP_HINT], Source={x:Static local:Loc.Current}}" />
+            </Grid>
+
+            <!-- model pane -->
+            <Grid x:Name="ModelPane" Visibility="Collapsed">
+              <Border Background="#101113" CornerRadius="5" ClipToBounds="True">
+                <Viewport3D x:Name="Viewport"
+                            MouseLeftButtonDown="OnViewportMouseDown"
+                            MouseRightButtonDown="OnViewportMouseDown"
+                            MouseUp="OnViewportMouseUp"
+                            MouseMove="OnViewportMouseMove"
+                            MouseWheel="OnViewportWheel">
+                  <Viewport3D.Camera>
+                    <PerspectiveCamera x:Name="Camera" Position="0,1,4"
+                                       LookDirection="0,0,-1" UpDirection="0,1,0"
+                                       FieldOfView="45" />
+                  </Viewport3D.Camera>
+                  <ModelVisual3D x:Name="SceneRoot" />
+                </Viewport3D>
+              </Border>
+
+              <Border VerticalAlignment="Top" HorizontalAlignment="Left" Margin="10"
+                      Background="#CC1A1C1F" CornerRadius="5" Padding="10,7"
+                      BorderBrush="{StaticResource Line}" BorderThickness="1">
+                <TextBlock x:Name="ModelStats" Style="{StaticResource Mono}" />
+              </Border>
+
+              <TextBlock x:Name="ModelHint" VerticalAlignment="Bottom"
+                         HorizontalAlignment="Center" Margin="10"
+                         Style="{StaticResource Dim}"
+                         Text="{Binding [MODEL_HINT], Source={x:Static local:Loc.Current}}" />
+
+              <TextBlock x:Name="ModelEmpty" HorizontalAlignment="Center"
+                         VerticalAlignment="Center" Style="{StaticResource Dim}"
+                         Text="{Binding [MODEL_PICK], Source={x:Static local:Loc.Current}}" />
+            </Grid>
+
+            <!-- texture pane -->
+            <Grid x:Name="TexturePane" Visibility="Collapsed">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+              <Border Grid.Row="0" Background="#101113" CornerRadius="5">
+                <Image x:Name="TextureImage" Stretch="Uniform"
+                       RenderOptions.BitmapScalingMode="NearestNeighbor" Margin="8" />
+              </Border>
+              <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="4,8,4,0">
+                <TextBlock x:Name="TextureInfo" Style="{StaticResource Mono}"
+                           VerticalAlignment="Center" />
+              </StackPanel>
+              <TextBlock x:Name="TextureEmpty" HorizontalAlignment="Center"
+                         VerticalAlignment="Center" Style="{StaticResource Dim}"
+                         Text="{Binding [TEX_PICK], Source={x:Static local:Loc.Current}}" />
+            </Grid>
+
+            <!-- animation pane -->
+            <Grid x:Name="AnimationPane" Visibility="Collapsed">
+              <Grid.RowDefinitions>
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="Auto" />
+                <RowDefinition Height="*" />
+                <RowDefinition Height="Auto" />
+              </Grid.RowDefinitions>
+
+              <Border Grid.Row="0" Style="{StaticResource Card}" Padding="12,10"
+                      Margin="0,0,0,8">
+                <StackPanel>
+                  <TextBlock x:Name="AnimationSummary"
+                             Text="{Binding [ANIM_STEP1], Source={x:Static local:Loc.Current}}" />
+                  <TextBlock x:Name="AnimationHelp" Style="{StaticResource Dim}"
+                             TextWrapping="Wrap" Margin="0,6,0,0"
+                             Text="{Binding [ANIM_ABOUT], Source={x:Static local:Loc.Current}}" />
+                </StackPanel>
+              </Border>
+
+              <Grid Grid.Row="1" Margin="0,0,0,8">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="180" />
+                </Grid.ColumnDefinitions>
+
+                <Button Grid.Column="0" Style="{StaticResource Primary}"
+                        Click="OnLoadAnimations"
+                        Content="{Binding [ANIM_LOAD], Source={x:Static local:Loc.Current}}" />
+                <Button Grid.Column="1" x:Name="ExportClipButton" IsEnabled="False"
+                        Click="OnExportAnimation"
+                        Content="{Binding [ANIM_EXPORT], Source={x:Static local:Loc.Current}}" />
+                <Button Grid.Column="2" x:Name="PlayButton" IsEnabled="False"
+                        Click="OnPlayAnimation"
+                        Content="{Binding [ANIM_PLAY], Source={x:Static local:Loc.Current}}" />
+                <Button Grid.Column="3" x:Name="StopButton" IsEnabled="False"
+                        Click="OnStopAnimation"
+                        Content="{Binding [ANIM_STOP], Source={x:Static local:Loc.Current}}" />
+
+                <Button Grid.Column="4" x:Name="ExportAllClipsButton" IsEnabled="False"
+                        Click="OnExportAllAnimations"
+                        Content="{Binding [ANIM_EXPORT_ALL], Source={x:Static local:Loc.Current}}" />
+
+                <TextBlock Grid.Column="6" Style="{StaticResource Dim}"
+                           VerticalAlignment="Center" Margin="0,0,8,0"
+                           Text="{Binding [FILTER], Source={x:Static local:Loc.Current}}" />
+                <TextBox Grid.Column="7" x:Name="ClipFilterBox" VerticalAlignment="Center"
+                         TextChanged="OnClipFilterChanged" />
+              </Grid>
+
+              <Grid Grid.Row="3" Margin="0,8,0,0">
+                <Grid.ColumnDefinitions>
+                  <ColumnDefinition Width="Auto" />
+                  <ColumnDefinition Width="*" />
+                  <ColumnDefinition Width="Auto" />
+                </Grid.ColumnDefinitions>
+                <TextBlock Grid.Column="0" Style="{StaticResource Dim}" VerticalAlignment="Center"
+                           Margin="0,0,8,0"
+                           Text="{Binding [ANIM_FRAME], Source={x:Static local:Loc.Current}}" />
+                <Slider Grid.Column="1" x:Name="FrameSlider" Minimum="0" Maximum="1"
+                        IsSnapToTickEnabled="True" TickFrequency="1" IsEnabled="False"
+                        ValueChanged="OnFrameChanged" />
+                <TextBlock Grid.Column="2" x:Name="FrameLabel" Style="{StaticResource Mono}"
+                           VerticalAlignment="Center" Margin="8,0,0,0" />
+              </Grid>
+
+              <Border Grid.Row="2" Background="#141518" CornerRadius="5">
+                <ListBox x:Name="AnimationList" Margin="4"
+                         HorizontalContentAlignment="Stretch"
+                         SelectionChanged="OnAnimationSelected">
+                  <ListBox.ItemTemplate>
+                    <DataTemplate>
+                      <Grid>
+                        <Grid.ColumnDefinitions>
+                          <ColumnDefinition Width="*" />
+                          <ColumnDefinition Width="Auto" />
+                        </Grid.ColumnDefinitions>
+                        <TextBlock Grid.Column="0" Text="{Binding ShortName}"
+                                   Style="{StaticResource Mono}" TextTrimming="CharacterEllipsis" />
+                        <TextBlock Grid.Column="1" Text="{Binding SizeText}"
+                                   Style="{StaticResource Dim}" Margin="12,0,4,0" />
+                      </Grid>
+                    </DataTemplate>
+                  </ListBox.ItemTemplate>
+                </ListBox>
+              </Border>
+            </Grid>
+
+            <!-- info pane -->
+            <Border x:Name="InfoPane" Visibility="Collapsed" Background="#141518"
+                    CornerRadius="5">
+              <ScrollViewer VerticalScrollBarVisibility="Auto">
+                <TextBox x:Name="InfoText" IsReadOnly="True" BorderThickness="0"
+                         Background="Transparent" TextWrapping="NoWrap"
+                         FontFamily="Cascadia Mono, Consolas, monospace" FontSize="11.5"
+                         Margin="6" />
+              </ScrollViewer>
+            </Border>
+
+          </Grid>
+        </Grid>
+      </Border>
+
+      <GridSplitter Grid.Column="3" HorizontalAlignment="Stretch" />
+
+      <!-- dependency tree -->
+      <Border Grid.Column="4" Style="{StaticResource Card}">
+        <Grid>
+          <Grid.RowDefinitions>
+            <RowDefinition Height="Auto" />
+            <RowDefinition Height="*" />
+          </Grid.RowDefinitions>
+          <TextBlock Grid.Row="0" Style="{StaticResource Heading}"
+                     Text="{Binding [PANE_DEPENDENCIES], Source={x:Static local:Loc.Current}}" />
+          <TreeView Grid.Row="1" x:Name="DependencyTree" Margin="4,0,4,4"
+                    SelectedItemChanged="OnDependencySelected"
+                    TreeViewItem.Expanded="OnTreeExpanded">
+            <TreeView.ItemTemplate>
+              <HierarchicalDataTemplate ItemsSource="{Binding Children}">
+                <StackPanel Orientation="Horizontal">
+                  <TextBlock Text="{Binding Tag}" Style="{StaticResource Mono}"
+                             Foreground="{StaticResource AccentDim}" MinWidth="46" />
+                  <TextBlock Text="{Binding Name}" />
+                  <TextBlock Text="{Binding Suffix}" Style="{StaticResource Dim}"
+                             Margin="8,0,0,0" />
+                </StackPanel>
+              </HierarchicalDataTemplate>
+            </TreeView.ItemTemplate>
+          </TreeView>
+        </Grid>
+      </Border>
+    </Grid>
+
+    <!-- ========================================================== status -->
+    <Border Grid.Row="3" Style="{StaticResource Card}" Padding="0" Margin="0,8,0,0">
+      <Grid>
+        <Grid.RowDefinitions>
+          <RowDefinition Height="Auto" />
+          <RowDefinition Height="Auto" />
+        </Grid.RowDefinitions>
+        <ProgressBar Grid.Row="0" x:Name="BusyBar" IsIndeterminate="True"
+                     Visibility="Collapsed" Margin="1,1,1,0" />
+        <TextBlock Grid.Row="1" x:Name="StatusText" Style="{StaticResource Mono}"
+                   Margin="10,6,10,6"
+                   Text="{Binding [STATUS_READY], Source={x:Static local:Loc.Current}}" />
+      </Grid>
+    </Border>
+  </Grid>
+</Window>

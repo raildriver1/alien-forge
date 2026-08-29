@@ -1,0 +1,12 @@
+C:\Users\8888\Desktop\_af_bin\alienforge.exe
+C:\Users\8888\Desktop\_af_bin\alienforge.dll
+C:\Users\8888\Desktop\_af_bin\alienforge.deps.json
+C:\Users\8888\Desktop\_af_bin\alienforge.runtimeconfig.json
+C:\Users\8888\Desktop\_af_bin\alienforge.pdb
+C:\Users\8888\Desktop\_af_bin\CathodeLib.dll
+C:\Users\8888\Desktop\_af_bin\K4os.Compression.LZ4.dll
+C:\Users\8888\Desktop\_af_bin\K4os.Compression.LZ4.Streams.dll
+C:\Users\8888\Desktop\_af_bin\K4os.Hash.xxHash.dll
+C:\Users\8888\Desktop\_af_bin\Extensions.Data.xxHash.dll
+C:\Users\8888\Desktop\_af_bin\AlienForge.Core.dll
+C:\Users\8888\Desktop\_af_bin\AlienForge.Core.pdb
