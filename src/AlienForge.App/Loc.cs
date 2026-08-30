@@ -131,6 +131,28 @@ public sealed class Loc : INotifyPropertyChanged
         ["MODEL_PICK"] = new("Выберите модель в дереве слева",
                              "Pick a model in the tree on the left"),
 
+        ["PARTS_TITLE"] = new("Части модели", "Model parts"),
+        ["PARTS_ISOLATE"] = new("Только эта", "Isolate"),
+        ["PARTS_SHOW_ALL"] = new("Показать все", "Show all"),
+
+        ["LIGHT_TITLE"] = new("Освещение", "Lighting"),
+        ["LIGHT_AZIMUTH"] = new("Поворот вокруг модели", "Rotation around model"),
+        ["LIGHT_ELEVATION"] = new("Высота источника", "Light height"),
+        ["LIGHT_INTENSITY"] = new("Яркость", "Brightness"),
+        ["LIGHT_AMBIENT"] = new("Заполняющий свет", "Ambient light"),
+        ["LIGHT_FOLLOW"] = new("Свет от камеры", "Light from camera"),
+        ["LIGHT_RESET"] = new("Сброс", "Reset"),
+        ["LIGHT_FROM_CAMERA"] = new("от камеры", "from camera"),
+
+        ["CAM_TITLE"] = new("Камера", "Camera"),
+        ["CAM_FOLLOW_MODEL"] = new("Следить за моделью в анимации",
+                                   "Follow the model during playback"),
+        ["CAM_HELP"] = new(
+            "Левая кнопка — поворот, средняя или правая — сдвиг, колесо — приближение. " +
+            "W A S D — движение, Q и E — вверх и вниз, Shift — быстрее, F — вписать в кадр.",
+            "Left button orbits, middle or right pans, wheel zooms. " +
+            "W A S D moves, Q and E go up and down, Shift is faster, F frames everything."),
+
         // ---------------------------------------------------------- texture tab
         ["TEX_FORMAT"] = new("Формат", "Format"),
         ["TEX_SIZE"] = new("Размер", "Size"),
@@ -146,8 +168,8 @@ public sealed class Loc : INotifyPropertyChanged
         // -------------------------------------------------------- animation tab
         ["ANIM_SKELETON"] = new("Скелет", "Skeleton"),
         ["ANIM_CLIPS"] = new("Клипов", "Clips"),
-        ["ANIM_EXPORT"] = new("Сохранить .hkx", "Save .hkx"),
-        ["ANIM_EXPORT_ALL"] = new("Сохранить все .hkx", "Save all .hkx"),
+        ["ANIM_EXPORT"] = new("Сохранить .glb", "Save .glb"),
+        ["ANIM_EXPORT_ALL"] = new("Все клипы в .glb", "All clips to .glb"),
         ["ANIM_LOAD"] = new("Найти анимации модели", "Find model animations"),
         ["ANIM_NONE"] = new("Для этой модели анимации не найдены",
                             "No animations found for this model"),
@@ -166,12 +188,14 @@ public sealed class Loc : INotifyPropertyChanged
             "{0} not found — Havok animations cannot be unpacked without it. Put it next " +
             "to AlienForge.exe or on the desktop under _havoklib\\build\\hkdump_bin."),
         ["ANIM_ABOUT"] = new(
-            "Это контейнеры анимации Havok из ANIMATION.PAK. Их можно сохранить как .hkx " +
-            "и открыть внешним инструментом. Проигрывание внутри программы и экспорт в " +
-            "Blender появятся, когда будет подключён распаковщик сплайнов Havok.",
-            "These are Havok animation containers from ANIMATION.PAK. They can be saved as " +
-            ".hkx and opened in an external tool. Playback in-app and Blender export will " +
-            "arrive once the Havok spline unpacker is wired in."),
+            "Клип можно проиграть здесь же и сохранить в .glb для Blender вместе с моделью " +
+            "и скелетом. В игре 14975 названных анимаций у 362 персонажей. Если скелет " +
+            "модели определить не удалось, выберите его в списке справа: у андроидов, " +
+            "например, человеческий риг, а не свой собственный.",
+            "A clip plays here and saves to .glb for Blender together with the model and its " +
+            "rig. The game holds 14975 named animations across 362 characters. When a model's " +
+            "rig cannot be worked out from its path, pick it from the list on the right: " +
+            "androids, for one, use a human rig rather than one of their own."),
 
         // ------------------------------------------------------------ browsing
         ["LIST_MODELS"] = new("Модели", "Models"),
@@ -184,6 +208,21 @@ public sealed class Loc : INotifyPropertyChanged
                            "Select something in the list on the left"),
         ["DEPENDENCIES_OF"] = new("Из чего состоит", "What it is made of"),
         ["DLG_HKX_FILTER"] = new("Анимация Havok (*.hkx)|*.hkx", "Havok animation (*.hkx)|*.hkx"),
+        ["ANIM_NO_SKELETON"] = new("Скелет для этой модели не найден",
+                                   "No skeleton found for this model"),
+        ["ANIM_EXPORT_OK"] = new("Записано анимаций: {0}, костей: {1}",
+                                 "Wrote {0} animations, {1} bones"),
+        ["ANIM_EXPORT_PARTIAL"] = new("Записано анимаций: {0}, не распаковалось секций: {1}",
+                                      "Wrote {0} animations, {1} sections failed"),
+        ["ANIM_EXPORT_RAW"] = new("Сырой .hkx", "Raw .hkx"),
+        ["ANIM_SKELETON_PICK"] = new("Скелет:", "Skeleton:"),
+        ["ANIM_RIG_MISMATCH"] = new(
+            "выбран не родной скелет модели — список и экспорт работают, поза будет неверной",
+            "not this model's own rig — listing and export work, the pose will be wrong"),
+        ["ANIM_RIG_UNKNOWN"] = new(
+            "по пути модели скелет не опознан — выберите его в списке",
+            "the model path does not name a rig — pick one from the list"),
+        ["EXPORT_VALID"] = new("проверка пройдена", "validated"),
         ["SAVED_N"] = new("Сохранено {0} файлов в {1}", "Saved {0} files to {1}"),
 
         // --------------------------------------------------------------- status

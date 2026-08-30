@@ -24,11 +24,38 @@ public static class MeshPreview
         public List<string> Notes { get; } = new();
 
         /// <summary>
-        /// Decoded submeshes paired with the geometry drawing them, so animation
+        /// Decoded submeshes paired with the objects drawing them, so animation
         /// playback can push new vertex positions into the same objects instead of
-        /// rebuilding the scene every frame.
+        /// rebuilding the scene every frame, and so single parts can be shown or
+        /// hidden without decoding anything again.
         /// </summary>
-        public List<(DecodedMesh mesh, MeshGeometry3D geometry)> Parts3D { get; } = new();
+        public List<PreviewPart> Parts3D { get; } = new();
+
+        /// <summary>The group the parts are added to, for toggling what is drawn.</summary>
+        public required Model3DGroup Geometry { get; init; }
+    }
+
+    /// <summary>One drawable submesh, with everything needed to inspect or hide it.</summary>
+    public sealed class PreviewPart
+    {
+        public required DecodedMesh Mesh { get; init; }
+        public required MeshGeometry3D Geometry { get; init; }
+        public required GeometryModel3D Drawing { get; init; }
+
+        /// <summary>The CATHODE material, for showing how the surface is put together.</summary>
+        public Materials.Material? Material { get; init; }
+
+        /// <summary>Whether a texture was found and applied.</summary>
+        public bool Textured { get; init; }
+
+        public bool Visible { get; set; } = true;
+
+        /// <summary>Short label for a list: part name, vertices and triangles.</summary>
+        public string Display
+            => $"{Mesh.Name}  ·  {Mesh.VertexCount} верт., {Mesh.TriangleCount} трис." +
+               $"{(Mesh.IsSkinned ? ", со скином" : "")}";
+
+        public override string ToString() => Display;
     }
 
     /// <summary>
@@ -43,7 +70,7 @@ public static class MeshPreview
         var textureCache = new Dictionary<Textures.TEX4, ImageSource?>();
         int parts = 0, vertices = 0, triangles = 0, textured = 0;
         var notes = new List<string>();
-        var built3D = new List<(DecodedMesh, MeshGeometry3D)>();
+        var built3D = new List<PreviewPart>();
 
         for (int ci = 0; ci < model.Components.Count; ci++)
         {
@@ -77,13 +104,21 @@ public static class MeshPreview
                     if (diffuse is not null)
                         textured++;
 
-                    group.Children.Add(new GeometryModel3D
+                    var drawing = new GeometryModel3D
                     {
                         Geometry = geometry,
                         Material = material,
                         BackMaterial = material,
+                    };
+                    group.Children.Add(drawing);
+                    built3D.Add(new PreviewPart
+                    {
+                        Mesh = decoded,
+                        Geometry = geometry,
+                        Drawing = drawing,
+                        Material = submesh.Material,
+                        Textured = diffuse is not null,
                     });
-                    built3D.Add((decoded, geometry));
 
                     parts++;
                     vertices += decoded.VertexCount;
@@ -99,6 +134,7 @@ public static class MeshPreview
         var built = new Built
         {
             Model = group,
+            Geometry = group,
             Bounds = group.Children.Count > 0 ? group.Bounds : new Rect3D(0, 0, 0, 1, 1, 1),
             Parts = parts,
             Vertices = vertices,

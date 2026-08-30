@@ -1,4 +1,5 @@
 using System.Text;
+using System.Threading.Tasks;
 using System.Windows;
 using System.Windows.Controls;
 using System.Windows.Input;
@@ -33,6 +34,17 @@ public partial class MainWindow : Window
     private List<MeshSkinner>? _skinners;
     private DispatcherTimer? _timer;
     private int _frame;
+
+    // Lighting the user can move. Kept as fields rather than rebuilt with the scene,
+    // so dragging a slider changes a direction instead of re-decoding the mesh.
+    private readonly AmbientLight _ambient = new(Color.FromRgb(0x55, 0x58, 0x5C));
+    private readonly DirectionalLight _keyLight = new(Color.FromRgb(0xE8, 0xEC, 0xF0),
+        new Vector3D(-0.5, -0.8, -0.6));
+    private readonly DirectionalLight _fillLight = new(Color.FromRgb(0x30, 0x40, 0x50),
+        new Vector3D(0.7, 0.3, 0.5));
+    private double _lightAzimuth = 215, _lightElevation = 35;
+    private double _lightIntensity = 1.0, _ambientLevel = 0.34;
+    private bool _lightFollowsCamera;
 
     // orbit camera state
     private double _yaw = 0.6, _pitch = 0.35, _distance = 4;
@@ -114,11 +126,21 @@ public partial class MainWindow : Window
     private void OnAbout(object sender, RoutedEventArgs e)
         => MessageBox.Show(Loc.T("ABOUT_TEXT"), Loc.T("MENU_ABOUT"));
 
-    private void OnLanguageRussian(object sender, RoutedEventArgs e)
-        => Loc.Current.Language = Lang.Russian;
+    private void OnLanguageRussian(object sender, RoutedEventArgs e) => SetLanguage(Lang.Russian);
 
-    private void OnLanguageEnglish(object sender, RoutedEventArgs e)
-        => Loc.Current.Language = Lang.English;
+    private void OnLanguageEnglish(object sender, RoutedEventArgs e) => SetLanguage(Lang.English);
+
+    /// <summary>
+    /// Switches language and rewrites the headers that carry a model name. Those have
+    /// their binding replaced by plain text, so they cannot follow the language on
+    /// their own.
+    /// </summary>
+    private void SetLanguage(Lang language)
+    {
+        Loc.Current.Language = language;
+        if (_selectedModel is not null)
+            ShowSelectedName(_selectedModel.Name);
+    }
 
     private void OnFilterKeyDown(object sender, KeyEventArgs e)
     {
@@ -192,6 +214,7 @@ public partial class MainWindow : Window
             AnimationList.ItemsSource = null;
             _clips = null;
             ExportClipButton.IsEnabled = false;
+            ExportRawClipButton.IsEnabled = false;
             ExportAllClipsButton.IsEnabled = false;
 
             SetStatus(Loc.F("STATUS_LOADED", workspace.Name, workspace.ModelCount,
@@ -239,7 +262,15 @@ public partial class MainWindow : Window
                 }
                 ShowModel(model);
                 BuildMap(model);
-                SelectTab(TabMap);
+                ShowSelectedName(model.Name);
+
+                // Picking another model while looking at one should swap the model, not
+                // throw the view somewhere else. Only a tab that cannot show a model at
+                // all gives way, and then the model view is the useful place to land.
+                if (PreviewTabs.SelectedIndex is not (TabMap or TabModel or TabInfo))
+                    SelectTab(TabModel);
+                else
+                    UpdatePaneVisibility();
                 break;
 
             case Textures.TEX4 texture:
@@ -265,6 +296,24 @@ public partial class MainWindow : Window
             PreviewTabs.SelectedIndex = index;
         else
             UpdatePaneVisibility();
+    }
+
+    /// <summary>
+    /// Puts the current model's name on the tabs that show it, so the header reads
+    /// "Модель — ALIEN" and it is obvious which model is on screen.
+    /// </summary>
+    private void ShowSelectedName(string? modelName)
+    {
+        string leaf = LeafOf(modelName);
+        TabMapItem.Header = string.IsNullOrEmpty(leaf)
+            ? Loc.T("TAB_MAP")
+            : $"{Loc.T("TAB_MAP")} — {leaf}";
+        TabModelItem.Header = string.IsNullOrEmpty(leaf)
+            ? Loc.T("TAB_MODEL")
+            : $"{Loc.T("TAB_MODEL")} — {leaf}";
+        TabAnimationItem.Header = string.IsNullOrEmpty(leaf)
+            ? Loc.T("TAB_ANIMATION")
+            : $"{Loc.T("TAB_ANIMATION")} — {leaf}";
     }
 
     private void OnTabChanged(object sender, SelectionChangedEventArgs e)
@@ -397,6 +446,11 @@ public partial class MainWindow : Window
         ModelStats.Text = string.Empty;
         ModelEmpty.Visibility = Visibility.Visible;
         _selectedModel = null;
+        _built = null;
+        _suppressPartEvents = true;
+        PartList.Items.Clear();
+        PartCount.Text = "0";
+        _suppressPartEvents = false;
     }
 
     private void ShowModel(Models.CS2 model)
@@ -420,13 +474,13 @@ public partial class MainWindow : Window
 
             var scene = new Model3DGroup();
             scene.Children.Add(built.Model);
-            scene.Children.Add(new AmbientLight(Color.FromRgb(0x55, 0x58, 0x5C)));
-            scene.Children.Add(new DirectionalLight(Color.FromRgb(0xE8, 0xEC, 0xF0),
-                new Vector3D(-0.5, -0.8, -0.6)));
-            scene.Children.Add(new DirectionalLight(Color.FromRgb(0x30, 0x40, 0x50),
-                new Vector3D(0.7, 0.3, 0.5)));
+            scene.Children.Add(_ambient);
+            scene.Children.Add(_keyLight);
+            scene.Children.Add(_fillLight);
             SceneRoot.Content = scene;
+            UpdateLighting();
 
+            FillPartList(built);
             FrameCamera(built.Bounds);
 
             ModelStats.Text = string.Join("\n", new[]
@@ -469,12 +523,204 @@ public partial class MainWindow : Window
         Camera.UpDirection = new Vector3D(0, 1, 0);
         Camera.NearPlaneDistance = Math.Max(0.001, _distance * 0.005);
         Camera.FarPlaneDistance = _distance * 40;
+
+        // A headlamp has to be re-aimed whenever the camera moves.
+        if (_lightFollowsCamera)
+            UpdateLighting();
     }
 
     private void OnResetCamera(object sender, RoutedEventArgs e)
     {
         if (SceneRoot.Content is Model3DGroup group)
             FrameCamera(group.Bounds);
+    }
+
+    // --------------------------------------------------------------- lighting
+    /// <summary>
+    /// Points the lights where the sliders say and sets how hard they burn.
+    /// </summary>
+    /// <remarks>
+    /// Azimuth turns the light around the model, elevation lifts it overhead. The fill
+    /// light stays opposite the key light at a fraction of its strength, which keeps
+    /// the shadowed side readable instead of solid black. Colours are scaled rather
+    /// than replaced, so the cool fill and warm key keep their character at any
+    /// brightness.
+    /// </remarks>
+    private void UpdateLighting()
+    {
+        double azimuth = _lightAzimuth * Math.PI / 180.0;
+        double elevation = _lightElevation * Math.PI / 180.0;
+
+        Vector3D toLight;
+        if (_lightFollowsCamera)
+        {
+            // A headlamp: the key light sits at the camera, so nothing is ever unlit.
+            toLight = -Camera.LookDirection;
+            if (toLight.Length > 1e-6)
+                toLight.Normalize();
+        }
+        else
+        {
+            double ce = Math.Cos(elevation);
+            toLight = new Vector3D(Math.Sin(azimuth) * ce, Math.Sin(elevation),
+                Math.Cos(azimuth) * ce);
+        }
+
+        // A DirectionalLight travels along its direction, so it points from the light
+        // towards the model: the negation of the vector aimed at the light.
+        _keyLight.Direction = -toLight;
+        _fillLight.Direction = toLight;
+
+        _keyLight.Color = Scale(Color.FromRgb(0xE8, 0xEC, 0xF0), _lightIntensity);
+        _fillLight.Color = Scale(Color.FromRgb(0x6E, 0x86, 0xA4), _lightIntensity * 0.28);
+        _ambient.Color = Scale(Color.FromRgb(0xFF, 0xFF, 0xFF), _ambientLevel);
+
+        if (LightReadout is not null)
+            LightReadout.Text = _lightFollowsCamera
+                ? Loc.T("LIGHT_FROM_CAMERA")
+                : $"{_lightAzimuth:F0}° / {_lightElevation:F0}°";
+    }
+
+    private static Color Scale(Color color, double factor)
+    {
+        factor = Math.Clamp(factor, 0, 2);
+        return Color.FromRgb(
+            (byte)Math.Clamp(color.R * factor, 0, 255),
+            (byte)Math.Clamp(color.G * factor, 0, 255),
+            (byte)Math.Clamp(color.B * factor, 0, 255));
+    }
+
+    private void OnLightAzimuthChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _lightAzimuth = e.NewValue;
+        UpdateLighting();
+    }
+
+    private void OnLightElevationChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _lightElevation = e.NewValue;
+        UpdateLighting();
+    }
+
+    private void OnLightIntensityChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _lightIntensity = e.NewValue;
+        UpdateLighting();
+    }
+
+    private void OnAmbientChanged(object sender, RoutedPropertyChangedEventArgs<double> e)
+    {
+        _ambientLevel = e.NewValue;
+        UpdateLighting();
+    }
+
+    private void OnLightFollowCamera(object sender, RoutedEventArgs e)
+    {
+        _lightFollowsCamera = FollowCameraCheck.IsChecked == true;
+        LightAzimuth.IsEnabled = !_lightFollowsCamera;
+        LightElevation.IsEnabled = !_lightFollowsCamera;
+        UpdateLighting();
+    }
+
+    private void OnResetLight(object sender, RoutedEventArgs e)
+    {
+        FollowCameraCheck.IsChecked = false;
+        _lightFollowsCamera = false;
+        LightAzimuth.IsEnabled = true;
+        LightElevation.IsEnabled = true;
+        LightAzimuth.Value = 215;
+        LightElevation.Value = 35;
+        LightIntensity.Value = 1.0;
+        AmbientLevel.Value = 0.34;
+        UpdateLighting();
+    }
+
+    // ------------------------------------------------------------- submeshes
+    /// <summary>
+    /// Lists the model's parts so they can be picked apart one at a time. A character
+    /// arrives as a dozen submeshes with separate materials, and telling them apart on
+    /// a solid silhouette is impossible.
+    /// </summary>
+    private void FillPartList(MeshPreview.Built built)
+    {
+        _suppressPartEvents = true;
+        PartList.Items.Clear();
+        foreach (var part in built.Parts3D)
+            PartList.Items.Add(part);
+        PartCount.Text = built.Parts3D.Count.ToString();
+        _suppressPartEvents = false;
+    }
+
+    private bool _suppressPartEvents;
+
+    /// <summary>Draws only the ticked parts, keeping their order in the group.</summary>
+    private void ApplyPartVisibility()
+    {
+        if (_built is null)
+            return;
+
+        _built.Geometry.Children.Clear();
+        foreach (var part in _built.Parts3D)
+            if (part.Visible)
+                _built.Geometry.Children.Add(part.Drawing);
+    }
+
+    private void OnPartVisibilityChanged(object sender, RoutedEventArgs e)
+    {
+        if (_suppressPartEvents || sender is not CheckBox { DataContext: MeshPreview.PreviewPart part })
+            return;
+        part.Visible = ((CheckBox)sender).IsChecked == true;
+        ApplyPartVisibility();
+    }
+
+    private void OnPartSelected(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressPartEvents || PartList.SelectedItem is not MeshPreview.PreviewPart part)
+            return;
+        ShowInfo(DescribePart(part));
+    }
+
+    /// <summary>Shows one part alone, which is the quickest way to find what it is.</summary>
+    private void OnIsolatePart(object sender, RoutedEventArgs e)
+    {
+        if (_built is null || PartList.SelectedItem is not MeshPreview.PreviewPart chosen)
+            return;
+
+        _suppressPartEvents = true;
+        foreach (var part in _built.Parts3D)
+            part.Visible = ReferenceEquals(part, chosen);
+        RefreshPartChecks();
+        _suppressPartEvents = false;
+        ApplyPartVisibility();
+        FrameCamera(chosen.Drawing.Bounds);
+    }
+
+    private void OnShowAllParts(object sender, RoutedEventArgs e)
+    {
+        if (_built is null)
+            return;
+
+        _suppressPartEvents = true;
+        foreach (var part in _built.Parts3D)
+            part.Visible = true;
+        RefreshPartChecks();
+        _suppressPartEvents = false;
+        ApplyPartVisibility();
+        FrameCamera(_built.Geometry.Bounds);
+    }
+
+    /// <summary>
+    /// Rebuilds the list so the tick boxes match the parts. The items are the same
+    /// objects, so this only refreshes what is drawn in the list.
+    /// </summary>
+    private void RefreshPartChecks()
+    {
+        var selected = PartList.SelectedItem;
+        var items = PartList.Items.Cast<object>().ToList();
+        PartList.Items.Clear();
+        foreach (var item in items)
+            PartList.Items.Add(item);
+        PartList.SelectedItem = selected;
     }
 
     private void OnToggleCollision(object sender, RoutedEventArgs e)
@@ -485,51 +731,200 @@ public partial class MainWindow : Window
 
     private void OnViewportMouseDown(object sender, MouseButtonEventArgs e)
     {
-        _dragFrom = e.GetPosition(Viewport);
-        _dragOrbit = e.ChangedButton == MouseButton.Left;
-        _dragPan = e.ChangedButton == MouseButton.Right;
-        Viewport.CaptureMouse();
+        _dragFrom = e.GetPosition(ViewportHost);
+
+        // Middle and right both pan, and Alt with the left button does too: a trackpad
+        // or a two-button mouse has no comfortable middle click.
+        bool altHeld = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
+        _dragPan = e.ChangedButton is MouseButton.Right or MouseButton.Middle
+                   || (e.ChangedButton == MouseButton.Left && altHeld);
+        _dragOrbit = e.ChangedButton == MouseButton.Left && !altHeld;
+        // Focus so the keyboard shortcuts below reach the viewport.
+        ViewportHost.Focus();
+        ViewportHost.CaptureMouse();
     }
 
     private void OnViewportMouseUp(object sender, MouseButtonEventArgs e)
     {
         _dragOrbit = _dragPan = false;
-        Viewport.ReleaseMouseCapture();
+        ViewportHost.ReleaseMouseCapture();
     }
 
     private void OnViewportMouseMove(object sender, MouseEventArgs e)
     {
         if (!_dragOrbit && !_dragPan)
             return;
-        var now = e.GetPosition(Viewport);
+        var now = e.GetPosition(ViewportHost);
         double dx = now.X - _dragFrom.X, dy = now.Y - _dragFrom.Y;
         _dragFrom = now;
 
         if (_dragOrbit)
         {
-            _yaw -= dx * 0.01;
-            _pitch = Math.Clamp(_pitch + dy * 0.01, -1.5, 1.5);
+            // Turn by how far the pointer crossed the window, not by a fixed amount per
+            // pixel. A constant rate means a small window spins wildly while a large one
+            // barely moves; tied to height, dragging the full height is half a turn
+            // whatever the window size.
+            double perPixel = Math.PI / Math.Max(200.0, ViewportHost.ActualHeight);
+            _yaw -= dx * perPixel;
+            _pitch = Math.Clamp(_pitch + dy * perPixel, -1.45, 1.45);
         }
         else
         {
-            // Pan across the camera plane, scaled so it feels the same at any zoom.
-            var forward = Camera.LookDirection;
-            forward.Normalize();
-            var right = Vector3D.CrossProduct(new Vector3D(0, 1, 0), forward);
-            if (right.Length < 1e-6)
-                right = new Vector3D(1, 0, 0);
-            right.Normalize();
-            var up = Vector3D.CrossProduct(forward, right);
-            double scale = _distance * 0.0015;
-            _target += right * (dx * scale) + up * (dy * scale);
+            // Exact panning: one pixel of drag moves the world by exactly one pixel's
+            // worth at the pivot's depth, so whatever is under the pointer stays under
+            // it. The old constant was a guess and drifted at every zoom level.
+            var (_, screenRight, screenUp) = CameraAxes();
+            double perPixel = WorldUnitsPerPixel();
+            _target -= screenRight * (dx * perPixel);
+            _target += screenUp * (dy * perPixel);
         }
         UpdateCamera();
     }
 
+    /// <summary>Forward, screen-right and screen-up of the camera, all unit length.</summary>
+    private (Vector3D forward, Vector3D right, Vector3D up) CameraAxes()
+    {
+        var forward = Camera.LookDirection;
+        if (forward.Length < 1e-9)
+            forward = new Vector3D(0, 0, -1);
+        forward.Normalize();
+
+        var right = Vector3D.CrossProduct(forward, new Vector3D(0, 1, 0));
+        if (right.Length < 1e-6)
+            right = new Vector3D(1, 0, 0);   // looking straight up or down
+        right.Normalize();
+
+        var up = Vector3D.CrossProduct(right, forward);
+        up.Normalize();
+        return (forward, right, up);
+    }
+
+    /// <summary>
+    /// How much world space one screen pixel covers at the pivot's distance.
+    /// </summary>
+    /// <remarks>
+    /// WPF states <see cref="PerspectiveCamera.FieldOfView"/> horizontally, so the
+    /// vertical half-angle comes from it through the aspect ratio. Getting this right is
+    /// what makes a drag track the pointer instead of merely moving in the right
+    /// direction.
+    /// </remarks>
+    private double WorldUnitsPerPixel()
+    {
+        double height = Math.Max(1, ViewportHost.ActualHeight);
+        double width = Math.Max(1, ViewportHost.ActualWidth);
+        double tanHalfX = Math.Tan(Camera.FieldOfView * Math.PI / 360.0);
+        double tanHalfY = tanHalfX * height / width;
+        return 2 * _distance * tanHalfY / height;
+    }
+
+    /// <summary>
+    /// The world point the pointer is aimed at, taken on the plane through the pivot.
+    /// </summary>
+    private Point3D AimPoint(System.Windows.Point cursor)
+    {
+        double height = Math.Max(1, ViewportHost.ActualHeight);
+        double width = Math.Max(1, ViewportHost.ActualWidth);
+        double tanHalfX = Math.Tan(Camera.FieldOfView * Math.PI / 360.0);
+        double tanHalfY = tanHalfX * height / width;
+
+        // Normalised device coordinates: -1..1 across the window, y up.
+        double ndcX = 2 * cursor.X / width - 1;
+        double ndcY = 1 - 2 * cursor.Y / height;
+
+        var (forward, right, up) = CameraAxes();
+        var direction = forward + right * (ndcX * tanHalfX) + up * (ndcY * tanHalfY);
+        if (direction.Length < 1e-9)
+            return _target;
+        direction.Normalize();
+
+        // Walk out to the pivot's plane so the result sits at the depth being examined.
+        double along = Vector3D.DotProduct(_target - Camera.Position, forward);
+        double reach = Vector3D.DotProduct(direction, forward);
+        if (Math.Abs(reach) < 1e-6)
+            return _target;
+        return Camera.Position + direction * (along / reach);
+    }
+
+    /// <summary>
+    /// Zooms toward whatever the pointer is over, not toward the pivot.
+    /// </summary>
+    /// <remarks>
+    /// A plain dolly moves along the line to the pivot, so anything off-centre slides
+    /// out of frame as you close in and you end up alternating zoom and pan to look at
+    /// one detail. Dragging the pivot toward the aimed point by the same fraction the
+    /// distance shrinks makes the view converge on that point instead. Zooming out
+    /// leaves the pivot alone, so backing off does not wander.
+    /// </remarks>
     private void OnViewportWheel(object sender, MouseWheelEventArgs e)
     {
-        _distance = Math.Clamp(_distance * (e.Delta > 0 ? 0.88 : 1.135), 0.05, 5000);
+        double factor = e.Delta > 0 ? 0.86 : 1 / 0.86;
+        double next = Math.Clamp(_distance * factor, 0.02, 20000);
+        double applied = _distance <= 0 ? 1 : next / _distance;
+
+        if (applied < 1)
+        {
+            var aim = AimPoint(e.GetPosition(ViewportHost));
+            double pull = 1 - applied;
+            _target = new Point3D(
+                _target.X + (aim.X - _target.X) * pull,
+                _target.Y + (aim.Y - _target.Y) * pull,
+                _target.Z + (aim.Z - _target.Z) * pull);
+        }
+
+        _distance = next;
         UpdateCamera();
+    }
+
+    /// <summary>
+    /// Keyboard navigation, so the view can be driven without a spare hand on the mouse.
+    /// </summary>
+    /// <remarks>
+    /// W and S move along the view direction, A and D sideways, Q and E straight up and
+    /// down. Steps scale with how far the camera is from what it is looking at, which is
+    /// what keeps the same key useful both when inspecting a hand and when crossing a
+    /// room. Shift multiplies the step for covering distance.
+    /// </remarks>
+    private void OnViewportKeyDown(object sender, KeyEventArgs e)
+    {
+        var forward = Camera.LookDirection;
+        if (forward.Length < 1e-6)
+            return;
+        forward.Normalize();
+
+        var right = Vector3D.CrossProduct(new Vector3D(0, 1, 0), forward);
+        if (right.Length < 1e-6)
+            right = new Vector3D(1, 0, 0);
+        right.Normalize();
+        var up = new Vector3D(0, 1, 0);
+
+        double step = Math.Max(0.02, _distance * 0.08);
+        if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
+            step *= 4;
+
+        Vector3D move = default;
+        switch (e.Key)
+        {
+            case Key.W or Key.Up: move = forward * step; break;
+            case Key.S or Key.Down: move = -forward * step; break;
+            case Key.A or Key.Left: move = -right * step; break;
+            case Key.D or Key.Right: move = right * step; break;
+            case Key.E or Key.PageUp: move = up * step; break;
+            case Key.Q or Key.PageDown: move = -up * step; break;
+
+            case Key.F:
+                // Frame whatever is on screen, the usual shortcut for "show me it all".
+                if (SceneRoot.Content is Model3DGroup group)
+                    FrameCamera(group.Bounds);
+                e.Handled = true;
+                return;
+
+            default:
+                return;
+        }
+
+        _target += move;
+        UpdateCamera();
+        e.Handled = true;
     }
 
     // ---------------------------------------------------------- texture view
@@ -582,6 +977,37 @@ public partial class MainWindow : Window
 
         foreach (string note in built.Notes)
             sb.AppendLine($"  ! {note}");
+        return sb.ToString();
+    }
+
+    /// <summary>
+    /// One part on its own: its geometry, and the material read as a shader so it is
+    /// clear which texture feeds colour, which feeds the normals and which the blick.
+    /// </summary>
+    private string DescribePart(MeshPreview.PreviewPart part)
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(part.Mesh.Name);
+        sb.AppendLine();
+        sb.AppendLine($"вершин: {part.Mesh.VertexCount}");
+        sb.AppendLine($"треугольников: {part.Mesh.TriangleCount}");
+        sb.AppendLine($"LOD: {part.Mesh.LodName} (компонент {part.Mesh.ComponentIndex}, " +
+                      $"сабмеш {part.Mesh.SubmeshIndex})");
+        sb.AppendLine($"скин: {(part.Mesh.IsSkinned ? "есть, кости и веса прочитаны" : "нет")}");
+        sb.AppendLine($"нормали: {(part.Mesh.Normals is { Length: > 0 } ? "есть" : "нет")}, " +
+                      $"UV: {(part.Mesh.Uv0 is { Length: > 0 } ? "есть" : "нет")}");
+
+        var (min, max) = part.Mesh.Bounds();
+        sb.AppendLine($"габариты: {max.X - min.X:F2} x {max.Y - min.Y:F2} x {max.Z - min.Z:F2} м");
+        sb.AppendLine();
+
+        if (part.Material is not null)
+            sb.Append(ShaderLayout.Read(part.Material).Describe());
+        else
+            sb.AppendLine("материала нет");
+
+        foreach (string warning in part.Mesh.Warnings)
+            sb.AppendLine($"  ! {warning}");
         return sb.ToString();
     }
 
@@ -749,20 +1175,20 @@ public partial class MainWindow : Window
 
             // Indexing is quick, but the clip sweep reads a header per record across
             // 26 thousand records, so it is kept off the UI thread.
-            var found = await System.Threading.Tasks.Task.Run(() =>
+            var found = await Task.Run(() =>
             {
                 catalog ??= AnimationCatalog.Open(install);
-                return (catalog, clips: catalog.ClipsFor(modelName));
+                return (catalog, clips: catalog.ClipsFor(modelName),
+                    rigs: catalog.ListSkeletons());
             });
 
             _catalog = found.catalog;
             _clips = found.clips;
+            _forcedSkeleton = null;
+            FillSkeletonPicker(found.rigs, modelName);
             ApplyClipFilter();
+            ShowAnimationSummary(modelName);
 
-            AnimationSummary.Text =
-                $"{Loc.T("ANIM_SKELETON")}: {_catalog!.DescribeSkeleton(modelName)}    " +
-                $"{Loc.T("ANIM_CLIPS")}: {_clips.Count}";
-            ExportAllClipsButton.IsEnabled = _clips.Count > 0;
             if (_clips.Count == 0)
                 SetStatus(Loc.T("ANIM_NONE"));
 
@@ -776,6 +1202,109 @@ public partial class MainWindow : Window
         {
             _busy = false;
         }
+    }
+
+    /// <summary>Skeleton chosen by hand, overriding what the model path suggests.</summary>
+    private uint? _forcedSkeleton;
+
+    private bool _suppressSkeletonEvents;
+
+    /// <summary>One entry of the rig picker.</summary>
+    private sealed record RigChoice(uint Id, string Name, int Clips)
+    {
+        public override string ToString() => $"{Name}  ·  {Clips}";
+    }
+
+    /// <summary>
+    /// Fills the rig picker with every skeleton that has clips.
+    /// </summary>
+    /// <remarks>
+    /// A level only contains the characters that appear in it: the Alien's nest has the
+    /// Alien and a facehugger, and its other 426 models are decals, lights and fog. The
+    /// archive, though, holds 653 rigs and 362 of them have clips, Ripley's 984 among
+    /// them. Listing them all is what makes those reachable without hunting for a level
+    /// that happens to include the right model.
+    /// </remarks>
+    private void FillSkeletonPicker(List<(uint id, string name, int clips)> rigs, string? modelName)
+    {
+        _suppressSkeletonEvents = true;
+        SkeletonPicker.Items.Clear();
+
+        var (autoId, _, autoEntry) = _catalog!.ResolveSkeleton(modelName);
+        RigChoice? select = null;
+
+        foreach (var (id, name, clips) in rigs)
+        {
+            if (clips == 0)
+                continue;
+            var choice = new RigChoice(id, name, clips);
+            SkeletonPicker.Items.Add(choice);
+            if (autoEntry is not null && id == autoId)
+                select = choice;
+        }
+
+        SkeletonPicker.SelectedItem = select;
+        _suppressSkeletonEvents = false;
+    }
+
+    private async void OnSkeletonPicked(object sender, SelectionChangedEventArgs e)
+    {
+        if (_suppressSkeletonEvents || _catalog is null || _busy)
+            return;
+        if (SkeletonPicker.SelectedItem is not RigChoice choice)
+            return;
+
+        string modelName = _selectedModel?.Name ?? string.Empty;
+        var (autoId, _, autoEntry) = _catalog.ResolveSkeleton(modelName);
+
+        // Remember the override only when it differs from what the model itself implies.
+        _forcedSkeleton = autoEntry is not null && choice.Id == autoId ? null : choice.Id;
+
+        _busy = true;
+        try
+        {
+            var catalog = _catalog;
+            uint? force = _forcedSkeleton;
+            _clips = await Task.Run(() => catalog.ClipsFor(modelName, force));
+            ApplyClipFilter();
+            ShowAnimationSummary(modelName);
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"{ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    /// <summary>
+    /// Says which rig the list belongs to, and warns when it is not this model's own.
+    /// </summary>
+    /// <remarks>
+    /// Clips can be listed and exported for any rig, but posing needs the mesh that rig
+    /// was built for. Playing another character's clip on this model would put bones
+    /// where there are none, so the mismatch is stated rather than left to look broken.
+    /// </remarks>
+    private void ShowAnimationSummary(string? modelName)
+    {
+        if (_catalog is null)
+            return;
+
+        int count = _clips?.Count ?? 0;
+        AnimationSummary.Text = $"{Loc.T("ANIM_SKELETON")}: " +
+                                $"{_catalog.DescribeSkeleton(modelName, _forcedSkeleton)}    " +
+                                $"{Loc.T("ANIM_CLIPS")}: {count}";
+
+        var (_, _, autoEntry) = _catalog.ResolveSkeleton(modelName);
+        SkeletonNote.Text = _forcedSkeleton is not null
+            ? Loc.T("ANIM_RIG_MISMATCH")
+            : autoEntry is null
+                ? Loc.T("ANIM_RIG_UNKNOWN")
+                : string.Empty;
+
+        ExportAllClipsButton.IsEnabled = count > 0;
     }
 
     private void OnClipFilterChanged(object sender, TextChangedEventArgs e) => ApplyClipFilter();
@@ -795,6 +1324,7 @@ public partial class MainWindow : Window
     {
         bool has = AnimationList.SelectedItem is AnimationClipRef;
         ExportClipButton.IsEnabled = has;
+        ExportRawClipButton.IsEnabled = has;
         PlayButton.IsEnabled = has && _built is not null;
         if (AnimationList.SelectedItem is AnimationClipRef clip)
             ShowInfo(clip.Describe());
@@ -825,13 +1355,18 @@ public partial class MainWindow : Window
         {
             var catalog = _catalog;
             string modelName = _selectedModel.Name ?? string.Empty;
+            uint? force = _forcedSkeleton;
 
             // Sampling a clip runs an external process, so it stays off the UI thread.
-            var bundle = await System.Threading.Tasks.Task.Run(() =>
+            var bundle = await Task.Run(() =>
             {
                 byte[] clipHkx = catalog.ExtractHavok(clip);
-                byte[]? skeletonHkx = catalog.ExtractSkeletonHavok(modelName);
-                return dump.Load(clipHkx, skeletonHkx);
+                byte[]? skeletonHkx = catalog.ExtractSkeletonHavok(modelName, force);
+                var loaded = dump.Load(clipHkx, skeletonHkx);
+                // Real names, so the frame counter and the status line say something
+                // more useful than a section hash.
+                AnimationCatalog.ApplyNames(clip, loaded);
+                return loaded;
             });
 
             if (bundle.Skeleton.Count == 0 || bundle.Clips.Count == 0)
@@ -844,7 +1379,7 @@ public partial class MainWindow : Window
             // A container can hold several animations; the longest is the real one.
             _clip = bundle.Clips.OrderByDescending(c => c.Frames).First();
             _skinners = _built.Parts3D
-                .Select(part => new MeshSkinner(part.mesh))
+                .Select(part => new MeshSkinner(part.Mesh))
                 .ToList();
 
             FrameSlider.Minimum = 0;
@@ -897,8 +1432,8 @@ public partial class MainWindow : Window
         _timer?.Stop();
         // Put the mesh back the way it was decoded.
         if (_built is not null)
-            foreach (var (mesh, geometry) in _built.Parts3D)
-                WriteGeometry(geometry, mesh.Positions, mesh.Normals);
+            foreach (var part in _built.Parts3D)
+                WriteGeometry(part.Geometry, part.Mesh.Positions, part.Mesh.Normals);
         SetStatus(Loc.T("STATUS_READY"));
     }
 
@@ -921,7 +1456,26 @@ public partial class MainWindow : Window
         {
             var skinner = _skinners[i];
             skinner.Apply(skin);
-            WriteGeometry(_built.Parts3D[i].geometry, skinner.Positions, skinner.Normals);
+            WriteGeometry(_built.Parts3D[i].Geometry, skinner.Positions, skinner.Normals);
+        }
+
+        // Clips that travel, and most of them do, walk the character straight out of
+        // frame. Following the centre keeps it in view without touching zoom or angle,
+        // so the camera the user set up still applies.
+        if (FollowModelCheck?.IsChecked == true)
+        {
+            var bounds = _built.Geometry.Bounds;
+            if (!bounds.IsEmpty)
+            {
+                var centre = new Point3D(bounds.X + bounds.SizeX / 2,
+                    bounds.Y + bounds.SizeY / 2, bounds.Z + bounds.SizeZ / 2);
+                // Eased rather than snapped: a hard follow makes the whole scene jitter.
+                _target = new Point3D(
+                    _target.X + (centre.X - _target.X) * 0.25,
+                    _target.Y + (centre.Y - _target.Y) * 0.25,
+                    _target.Z + (centre.Z - _target.Z) * 0.25);
+                UpdateCamera();
+            }
         }
     }
 
@@ -948,11 +1502,140 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// Writes the selected clip's embedded Havok packfile out unchanged. Not a
-    /// finished animation yet, but it is the real payload and can be inspected or
-    /// converted outside the app.
+    /// Writes the selected clip as a .glb: the model, its rig, and the animation
+    /// baked in, which is what Blender opens directly.
     /// </summary>
-    private void OnExportAnimation(object sender, RoutedEventArgs e)
+    /// <remarks>
+    /// The raw Havok packfile is still available beside this, because it is the exact
+    /// payload the game ships and nothing about it is interpreted. But a .hkx cannot be
+    /// opened by anything a person is likely to have, so the animation goes out as
+    /// glTF by default.
+    /// </remarks>
+    private async void OnExportAnimation(object sender, RoutedEventArgs e)
+    {
+        if (_catalog is null || _selectedModel is null || _workspace is null
+            || AnimationList.SelectedItem is not AnimationClipRef clip)
+            return;
+
+        var dialog = new SaveFileDialog
+        {
+            Title = Loc.T("DLG_PICK_OUT"),
+            Filter = Loc.T("DLG_GLB_FILTER"),
+            FileName = Path.ChangeExtension(AssetNaming.Flatten(clip.DisplayName), ".glb"),
+        };
+        if (dialog.ShowDialog(this) != true)
+            return;
+
+        await ExportWithAnimations(new[] { clip }, dialog.FileName);
+    }
+
+    /// <summary>Every clip of this character in one file, ready to browse in Blender.</summary>
+    private async void OnExportAllAnimations(object sender, RoutedEventArgs e)
+    {
+        if (_catalog is null || _clips is null || _clips.Count == 0 || _selectedModel is null)
+            return;
+
+        var dialog = new SaveFileDialog
+        {
+            Title = Loc.T("DLG_PICK_OUT"),
+            Filter = Loc.T("DLG_GLB_FILTER"),
+            FileName = SafeLeaf(_selectedModel.Name) + "_all_animations.glb",
+        };
+        if (dialog.ShowDialog(this) != true)
+            return;
+
+        await ExportWithAnimations(_clips, dialog.FileName);
+    }
+
+    /// <summary>
+    /// Decodes the given sections, names their clips, and writes model, skin and
+    /// animations into one .glb.
+    /// </summary>
+    private async Task ExportWithAnimations(IReadOnlyList<AnimationClipRef> sections, string path)
+    {
+        if (_catalog is null || _workspace is null || _selectedModel is null)
+            return;
+
+        var dumper = HavokDump.TryCreate();
+        if (dumper is null)
+        {
+            SetStatus(Loc.F("ANIM_NO_TOOL", HavokDump.ToolName));
+            return;
+        }
+
+        var model = _selectedModel;
+        var workspace = _workspace;
+        var catalog = _catalog;
+        uint? force = _forcedSkeleton;
+        SetBusy(true);
+
+        try
+        {
+            var result = await Task.Run(() =>
+            {
+                byte[]? skeletonHkx = catalog.ExtractSkeletonHavok(model.Name, force);
+                if (skeletonHkx is null)
+                    throw new InvalidOperationException(Loc.T("ANIM_NO_SKELETON"));
+
+                SkeletonData? skeleton = null;
+                var clips = new List<ClipData>();
+                float fps = 30f;
+                int failed = 0;
+
+                foreach (var section in sections)
+                {
+                    try
+                    {
+                        var bundle = dumper.Load(catalog.ExtractHavok(section), skeletonHkx);
+                        AnimationCatalog.ApplyNames(section, bundle);
+                        skeleton ??= bundle.Skeleton;
+                        if (bundle.Fps > 0f)
+                            fps = bundle.Fps;
+                        // Additive clips are deltas meant to be layered, and on their own
+                        // they read as a mesh that barely moves. Kept, but they are not
+                        // what makes the export useful.
+                        clips.AddRange(bundle.Clips);
+                    }
+                    catch (Exception)
+                    {
+                        failed++;
+                    }
+                }
+
+                skeleton ??= dumper.LoadSkeletonOnly(skeletonHkx);
+                var animation = new AnimationBundle
+                {
+                    Skeleton = skeleton,
+                    Clips = clips,
+                    Fps = fps,
+                };
+
+                var export = ModelExporter.ExportGlb(workspace, model, path, null, animation);
+                var report = GlbValidator.Validate(path);
+                return (export, report, failed);
+            });
+
+            string note = result.failed > 0
+                ? Loc.F("ANIM_EXPORT_PARTIAL", result.export.Clips, result.failed)
+                : Loc.F("ANIM_EXPORT_OK", result.export.Clips, result.export.Bones);
+            SetStatus($"{note}  {path}  {result.export.Bytes / 1048576.0:F2} МБ  " +
+                      $"{(result.report.Ok ? Loc.T("EXPORT_VALID") : result.report.ToString())}");
+        }
+        catch (Exception ex)
+        {
+            SetStatus($"{ex.GetType().Name}: {ex.Message}");
+        }
+        finally
+        {
+            SetBusy(false);
+        }
+    }
+
+    /// <summary>
+    /// The untouched Havok packfile, for anyone who wants the original bytes rather
+    /// than a conversion.
+    /// </summary>
+    private void OnExportAnimationRaw(object sender, RoutedEventArgs e)
     {
         if (_catalog is null || AnimationList.SelectedItem is not AnimationClipRef clip)
             return;
@@ -968,32 +1651,5 @@ public partial class MainWindow : Window
         byte[] havok = _catalog.ExtractHavok(clip);
         File.WriteAllBytes(dialog.FileName, havok);
         SetStatus(Loc.F("STATUS_EXPORTED", dialog.FileName, havok.Length / 1048576.0));
-    }
-
-    private void OnExportAllAnimations(object sender, RoutedEventArgs e)
-    {
-        if (_catalog is null || _clips is null || _clips.Count == 0)
-            return;
-        var dialog = new OpenFolderDialog { Title = Loc.T("DLG_PICK_OUT") };
-        if (dialog.ShowDialog(this) != true)
-            return;
-
-        int written = 0;
-        var used = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
-        foreach (var clip in _clips)
-        {
-            byte[] havok = _catalog.ExtractHavok(clip);
-            if (havok.Length == 0)
-                continue;
-            // Names repeat inside the archive, so a suffix keeps variants apart.
-            string bare = Path.GetFileNameWithoutExtension(AssetNaming.Flatten(clip.ShortName));
-            string candidate = bare + ".hkx";
-            int n = 2;
-            while (!used.Add(candidate))
-                candidate = $"{bare}_{n++}.hkx";
-            File.WriteAllBytes(Path.Combine(dialog.FolderName, candidate), havok);
-            written++;
-        }
-        SetStatus(Loc.F("SAVED_N", written, dialog.FolderName));
     }
 }

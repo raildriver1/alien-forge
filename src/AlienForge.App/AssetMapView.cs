@@ -34,23 +34,61 @@ public sealed class MapNode
 /// <remarks>
 /// Drawn onto a Canvas by hand rather than with a layout panel, because the point of
 /// the view is the geometry: distance from the centre shows depth of the dependency,
-/// and the direction groups the kinds. Counts are shown on hubs so a model with 338
-/// clips stays readable instead of drawing 338 boxes.
+/// and the direction groups the kinds. Counts are shown on hubs so a model with
+/// hundreds of clips stays readable instead of drawing hundreds of boxes.
+/// <para>
+/// Spacing is derived from the boxes rather than guessed. Every node is measured
+/// before anything is positioned, and the arc a group occupies is then made wide
+/// enough, or pushed far enough out, that neighbours keep a real gap. Fixed angles
+/// cannot do this: fourteen leaves across a 1.25 radian fan at radius 165 leave about
+/// fifteen pixels each, while the boxes are nearly two hundred wide.
+/// </para>
 /// </remarks>
 public sealed class AssetMapView : Border
 {
-    private const double HubRadius = 210;
-    private const double LeafRadius = 165;
+    private const double HubDistance = 250;
+    private const double LeafDistance = 210;
+
+    /// <summary>Clear space kept between neighbouring boxes, in pixels.</summary>
+    private const double NodeGap = 14;
+
+    /// <summary>Widest arc one group may occupy, so groups stay visually separate.</summary>
+    private const double MaxGroupSpread = 1.5;
+
     private const int MaxLeavesPerHub = 14;
 
     private readonly Canvas _canvas = new();
     private readonly ScaleTransform _scale = new(1, 1);
     private readonly TranslateTransform _pan = new(0, 0);
 
+    private readonly List<Placed> _nodes = new();
+    private readonly List<Edge> _edges = new();
+
+    private Point _centre;
     private Point _dragFrom;
-    private bool _dragging;
+    private bool _panning;
+    private bool _movedFar;
+    private Placed? _nodeDrag;
 
     public event Action<MapNode>? NodeClicked;
+
+    /// <summary>A node on the canvas, with where it sits and what it is joined to.</summary>
+    private sealed class Placed
+    {
+        public required Border Box { get; init; }
+        public required MapNode Node { get; init; }
+        public Point Local;
+
+        /// <summary>Set once the user drags it, so relayout leaves it alone.</summary>
+        public bool Pinned;
+    }
+
+    private sealed class Edge
+    {
+        public required Line Line { get; init; }
+        public required Placed From { get; init; }
+        public required Placed To { get; init; }
+    }
 
     public AssetMapView()
     {
@@ -65,130 +103,175 @@ public sealed class AssetMapView : Border
         _canvas.Background = Brushes.Transparent;
         Child = _canvas;
 
-        MouseLeftButtonDown += OnPanStart;
-        MouseMove += OnPanMove;
-        MouseLeftButtonUp += OnPanEnd;
-        MouseLeave += OnPanEnd;
+        MouseLeftButtonDown += OnMouseDown;
+        MouseMove += OnMouseMove;
+        MouseLeftButtonUp += OnMouseUp;
+        MouseLeave += OnMouseUp;
         MouseWheel += OnWheel;
-        SizeChanged += (_, _) => Recentre();
+        SizeChanged += (_, _) => Reposition();
     }
 
-    private Point _centre;
-
+    // ------------------------------------------------------------------ build
     /// <summary>
     /// Lays out one model with its groups. Each group becomes a hub, and the group's
     /// items fan out beyond it.
     /// </summary>
-    public void Build(MapNode centre, IReadOnlyList<(MapNode hub, IReadOnlyList<MapNode> items)> groups)
+    public void Build(MapNode centre,
+        IReadOnlyList<(MapNode hub, IReadOnlyList<MapNode> items)> groups)
     {
         _canvas.Children.Clear();
+        _nodes.Clear();
+        _edges.Clear();
         _scale.ScaleX = _scale.ScaleY = 1;
         _pan.X = _pan.Y = 0;
 
-        // Hubs are spread over a full circle, starting to the left so that the first
-        // group reads as "what it is made of" rather than trailing off the top.
+        var centreNode = CreateNode(centre);
+        centreNode.Local = new Point(0, 0);
+
         int hubCount = Math.Max(1, groups.Count);
         for (int i = 0; i < groups.Count; i++)
         {
+            // Hubs are spread over a full circle, starting to the left so the first
+            // group reads as "what it is made of" rather than trailing off the top.
             double angle = Math.PI + i * (2 * Math.PI / hubCount);
-            var hubPoint = new Point(Math.Cos(angle) * HubRadius, Math.Sin(angle) * HubRadius);
-
-            AddEdge(new Point(0, 0), hubPoint, bright: true);
-
             var (hub, items) = groups[i];
-            int shown = Math.Min(items.Count, MaxLeavesPerHub);
-            if (shown > 0)
-            {
-                // Fan the leaves around the hub's own direction so they never fold
-                // back over the centre node.
-                double spread = shown == 1 ? 0 : 1.25;
-                double start = angle - spread / 2;
-                double step = shown <= 1 ? 0 : spread / (shown - 1);
 
-                for (int k = 0; k < shown; k++)
+            int shown = Math.Min(items.Count, MaxLeavesPerHub);
+            bool hasMore = items.Count > shown;
+            int leafCount = shown + (hasMore ? 1 : 0);
+
+            // Build the leaves first: their measured height decides how much arc the
+            // group needs, and therefore how far out the hub has to sit.
+            var leaves = new List<Placed>(leafCount);
+            for (int k = 0; k < shown; k++)
+                leaves.Add(CreateNode(items[k]));
+            if (hasMore)
+                leaves.Add(CreateNode(new MapNode
+                {
+                    Kind = MapNodeKind.More,
+                    Title = $"+{items.Count - shown}",
+                    Subtitle = null,
+                }));
+
+            double needed = leaves.Sum(l => l.Box.DesiredSize.Height + NodeGap);
+            double hubDistance = HubDistance;
+            double leafDistance = LeafDistance;
+
+            // Tangential room at a radius is radius times angle. If the leaves do not
+            // fit in the widest arc allowed, move them outwards until they do.
+            if (leafCount > 1)
+            {
+                double minRadius = needed / MaxGroupSpread;
+                if (leafDistance < minRadius)
+                    leafDistance = minRadius;
+            }
+
+            var hubPlaced = CreateNode(hub);
+            hubPlaced.Local = new Point(Math.Cos(angle) * hubDistance,
+                Math.Sin(angle) * hubDistance);
+            AddEdge(centreNode, hubPlaced, bright: true);
+
+            if (leafCount > 0)
+            {
+                double spread = leafCount == 1 ? 0 : Math.Min(MaxGroupSpread, needed / leafDistance);
+                double start = angle - spread / 2;
+                double step = leafCount <= 1 ? 0 : spread / (leafCount - 1);
+
+                for (int k = 0; k < leafCount; k++)
                 {
                     double leafAngle = start + k * step;
-                    var leafPoint = new Point(
-                        hubPoint.X + Math.Cos(leafAngle) * LeafRadius,
-                        hubPoint.Y + Math.Sin(leafAngle) * LeafRadius);
-                    AddEdge(hubPoint, leafPoint, bright: false);
-                    AddNode(items[k], leafPoint);
-                }
-
-                if (items.Count > shown)
-                {
-                    double leafAngle = start + spread / 2 + 0.32;
-                    var morePoint = new Point(
-                        hubPoint.X + Math.Cos(leafAngle) * LeafRadius,
-                        hubPoint.Y + Math.Sin(leafAngle) * LeafRadius);
-                    AddEdge(hubPoint, morePoint, bright: false);
-                    AddNode(new MapNode
-                    {
-                        Kind = MapNodeKind.More,
-                        Title = $"+{items.Count - shown}",
-                        Subtitle = null,
-                    }, morePoint);
+                    leaves[k].Local = new Point(
+                        hubPlaced.Local.X + Math.Cos(leafAngle) * leafDistance,
+                        hubPlaced.Local.Y + Math.Sin(leafAngle) * leafDistance);
+                    AddEdge(hubPlaced, leaves[k], bright: false);
                 }
             }
-
-            AddNode(hub, hubPoint);
         }
 
-        AddNode(centre, new Point(0, 0));
-        Recentre();
+        // Edges go in behind the boxes: added to the canvas first, drawn first.
+        foreach (var edge in _edges)
+            _canvas.Children.Add(edge.Line);
+        foreach (var placed in _nodes)
+            _canvas.Children.Add(placed.Box);
+
+        Reposition();
     }
 
-    public void Clear() => _canvas.Children.Clear();
+    public void Clear()
+    {
+        _canvas.Children.Clear();
+        _nodes.Clear();
+        _edges.Clear();
+    }
 
-    private void Recentre()
+    /// <summary>Puts every node back where the layout wants it.</summary>
+    public void ResetView()
+    {
+        _scale.ScaleX = _scale.ScaleY = 1;
+        _pan.X = _pan.Y = 0;
+        foreach (var placed in _nodes)
+            placed.Pinned = false;
+        Reposition();
+    }
+
+    // ----------------------------------------------------------------- layout
+    private void Reposition()
     {
         _centre = new Point(ActualWidth / 2, ActualHeight / 2);
-        foreach (UIElement child in _canvas.Children)
+
+        foreach (var placed in _nodes)
         {
-            if (child is FrameworkElement fe && fe.Tag is Point local)
-            {
-                Canvas.SetLeft(fe, _centre.X + local.X - fe.DesiredSize.Width / 2);
-                Canvas.SetTop(fe, _centre.Y + local.Y - fe.DesiredSize.Height / 2);
-            }
-            else if (child is Line line && line.Tag is (Point a, Point b))
-            {
-                line.X1 = _centre.X + a.X;
-                line.Y1 = _centre.Y + a.Y;
-                line.X2 = _centre.X + b.X;
-                line.Y2 = _centre.Y + b.Y;
-            }
+            var size = placed.Box.DesiredSize;
+            Canvas.SetLeft(placed.Box, _centre.X + placed.Local.X - size.Width / 2);
+            Canvas.SetTop(placed.Box, _centre.Y + placed.Local.Y - size.Height / 2);
+        }
+
+        foreach (var edge in _edges)
+        {
+            edge.Line.X1 = _centre.X + edge.From.Local.X;
+            edge.Line.Y1 = _centre.Y + edge.From.Local.Y;
+            edge.Line.X2 = _centre.X + edge.To.Local.X;
+            edge.Line.Y2 = _centre.Y + edge.To.Local.Y;
         }
     }
 
-    private void AddEdge(Point from, Point to, bool bright)
+    private void AddEdge(Placed from, Placed to, bool bright)
     {
-        var line = new Line
+        _edges.Add(new Edge
         {
-            Stroke = new SolidColorBrush(bright
-                ? Color.FromRgb(0x3E, 0x7A, 0x66)
-                : Color.FromRgb(0x2C, 0x30, 0x35)),
-            StrokeThickness = bright ? 1.6 : 1.1,
-            Tag = (from, to),
-            IsHitTestVisible = false,
-        };
-        _canvas.Children.Add(line);
+            Line = new Line
+            {
+                Stroke = new SolidColorBrush(bright
+                    ? Color.FromRgb(0x3E, 0x7A, 0x66)
+                    : Color.FromRgb(0x2C, 0x30, 0x35)),
+                StrokeThickness = bright ? 1.6 : 1.1,
+                IsHitTestVisible = false,
+            },
+            From = from,
+            To = to,
+        });
     }
 
-    private void AddNode(MapNode node, Point local)
+    /// <summary>
+    /// Builds a node's box and measures it. Measuring here rather than after
+    /// positioning is the whole point: the layout needs the real size.
+    /// </summary>
+    private Placed CreateNode(MapNode node)
     {
         var (fill, stroke) = Palette(node.Kind);
+        bool big = node.Kind == MapNodeKind.Model;
 
         var stack = new StackPanel { Orientation = Orientation.Vertical };
         stack.Children.Add(new TextBlock
         {
             Text = node.Title,
             Foreground = new SolidColorBrush(Color.FromRgb(0xDC, 0xDF, 0xE4)),
-            FontSize = node.Kind == MapNodeKind.Model ? 14 : 11.5,
+            FontSize = big ? 14 : 11.5,
             FontWeight = node.Kind is MapNodeKind.Model or MapNodeKind.Hub
                 ? FontWeights.SemiBold
                 : FontWeights.Normal,
             TextTrimming = TextTrimming.CharacterEllipsis,
-            MaxWidth = node.Kind == MapNodeKind.Model ? 260 : 190,
+            MaxWidth = big ? 260 : 190,
         });
         if (!string.IsNullOrEmpty(node.Subtitle))
         {
@@ -198,7 +281,7 @@ public sealed class AssetMapView : Border
                 Foreground = new SolidColorBrush(Color.FromRgb(0x8B, 0x92, 0x9B)),
                 FontSize = 10.5,
                 TextTrimming = TextTrimming.CharacterEllipsis,
-                MaxWidth = node.Kind == MapNodeKind.Model ? 260 : 190,
+                MaxWidth = big ? 260 : 190,
                 Margin = new Thickness(0, 2, 0, 0),
             });
         }
@@ -207,33 +290,46 @@ public sealed class AssetMapView : Border
         {
             Background = new SolidColorBrush(fill),
             BorderBrush = new SolidColorBrush(stroke),
-            BorderThickness = new Thickness(node.Kind == MapNodeKind.Model ? 2 : 1),
+            BorderThickness = new Thickness(big ? 2 : 1),
             CornerRadius = new CornerRadius(7),
-            Padding = new Thickness(node.Kind == MapNodeKind.Model ? 16 : 10,
-                node.Kind == MapNodeKind.Model ? 11 : 7,
-                node.Kind == MapNodeKind.Model ? 16 : 10,
-                node.Kind == MapNodeKind.Model ? 11 : 7),
+            Padding = new Thickness(big ? 16 : 10, big ? 11 : 7, big ? 16 : 10, big ? 11 : 7),
             Child = stack,
-            Tag = local,
-            Cursor = node.Payload is null ? Cursors.Arrow : Cursors.Hand,
+            Cursor = Cursors.Hand,
+            ToolTip = node.Subtitle is null
+                ? node.Title
+                : $"{node.Title}\n{node.Subtitle}",
         };
-        box.ToolTip = node.Subtitle is null ? node.Title : $"{node.Title}\n{node.Subtitle}";
+
+        var placed = new Placed { Box = box, Node = node };
+
+        box.MouseLeftButtonDown += (_, e) =>
+        {
+            // Grab this node instead of panning the whole map.
+            _nodeDrag = placed;
+            _dragFrom = e.GetPosition(this);
+            _movedFar = false;
+            _panning = false;
+            CaptureMouse();
+            e.Handled = true;
+        };
 
         box.MouseLeftButtonUp += (_, e) =>
         {
-            // A click that ended a pan should not count as picking a node.
-            if (!_dragging && node.Payload is not null)
+            // A drag that ended on a node is not a click on it.
+            if (!_movedFar && node.Payload is not null)
             {
                 NodeClicked?.Invoke(node);
                 e.Handled = true;
             }
         };
+
         box.MouseEnter += (_, _) => box.BorderBrush = new SolidColorBrush(
             Color.FromRgb(0x5F, 0xD3, 0xA0));
         box.MouseLeave += (_, _) => box.BorderBrush = new SolidColorBrush(stroke);
 
-        _canvas.Children.Add(box);
         box.Measure(new Size(double.PositiveInfinity, double.PositiveInfinity));
+        _nodes.Add(placed);
+        return placed;
     }
 
     private static (Color fill, Color stroke) Palette(MapNodeKind kind) => kind switch
@@ -247,38 +343,58 @@ public sealed class AssetMapView : Border
     };
 
     // ------------------------------------------------------------- navigation
-    private void OnPanStart(object sender, MouseButtonEventArgs e)
+    private void OnMouseDown(object sender, MouseButtonEventArgs e)
     {
+        // Reached only when the press missed every node, so this pans the map.
+        _nodeDrag = null;
+        _panning = true;
+        _movedFar = false;
         _dragFrom = e.GetPosition(this);
-        _dragging = false;
         CaptureMouse();
     }
 
-    private void OnPanMove(object sender, MouseEventArgs e)
+    private void OnMouseMove(object sender, MouseEventArgs e)
     {
         if (e.LeftButton != MouseButtonState.Pressed || !IsMouseCaptured)
             return;
+
         var now = e.GetPosition(this);
         double dx = now.X - _dragFrom.X, dy = now.Y - _dragFrom.Y;
-        if (!_dragging && Math.Abs(dx) + Math.Abs(dy) < 4)
+        if (!_movedFar && Math.Abs(dx) + Math.Abs(dy) < 4)
             return;
-        _dragging = true;
-        _pan.X += dx;
-        _pan.Y += dy;
+        _movedFar = true;
         _dragFrom = now;
+
+        if (_nodeDrag is not null)
+        {
+            // Screen pixels divided by zoom, or the node would run away from the
+            // pointer once the map is scaled.
+            double scale = _scale.ScaleX <= 0 ? 1 : _scale.ScaleX;
+            _nodeDrag.Local = new Point(_nodeDrag.Local.X + dx / scale,
+                _nodeDrag.Local.Y + dy / scale);
+            _nodeDrag.Pinned = true;
+            Reposition();
+        }
+        else if (_panning)
+        {
+            _pan.X += dx;
+            _pan.Y += dy;
+        }
     }
 
-    private void OnPanEnd(object sender, MouseEventArgs e)
+    private void OnMouseUp(object sender, MouseEventArgs e)
     {
         ReleaseMouseCapture();
-        // Cleared on the next input so the node click handler can still see it.
-        Dispatcher.BeginInvoke(new Action(() => _dragging = false));
+        _panning = false;
+        _nodeDrag = null;
+        // Cleared on the next idle turn so the node's click handler still sees it.
+        Dispatcher.BeginInvoke(new Action(() => _movedFar = false));
     }
 
     private void OnWheel(object sender, MouseWheelEventArgs e)
     {
         double factor = e.Delta > 0 ? 1.12 : 1 / 1.12;
-        double next = Math.Clamp(_scale.ScaleX * factor, 0.25, 3.0);
+        double next = Math.Clamp(_scale.ScaleX * factor, 0.2, 3.0);
         factor = next / _scale.ScaleX;
 
         // Zoom about the cursor so the thing under the pointer stays put.
@@ -286,11 +402,5 @@ public sealed class AssetMapView : Border
         _pan.X = at.X - factor * (at.X - _pan.X);
         _pan.Y = at.Y - factor * (at.Y - _pan.Y);
         _scale.ScaleX = _scale.ScaleY = next;
-    }
-
-    public void ResetView()
-    {
-        _scale.ScaleX = _scale.ScaleY = 1;
-        _pan.X = _pan.Y = 0;
     }
 }

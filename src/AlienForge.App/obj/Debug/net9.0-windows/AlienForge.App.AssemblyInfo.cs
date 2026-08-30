@@ -13,7 +13,7 @@ using System.Reflection;
 [assembly: System.Reflection.AssemblyCompanyAttribute("AlienForge")]
 [assembly: System.Reflection.AssemblyConfigurationAttribute("Debug")]
 [assembly: System.Reflection.AssemblyFileVersionAttribute("0.1.0.0")]
-[assembly: System.Reflection.AssemblyInformationalVersionAttribute("0.1.0+cb3c246cad4b0c034eca2aae24ea307ad141920d")]
+[assembly: System.Reflection.AssemblyInformationalVersionAttribute("0.1.0+58dbe0a0d153479bb9f4334d0b2217eb6d6e60b8")]
 [assembly: System.Reflection.AssemblyProductAttribute("AlienForge")]
 [assembly: System.Reflection.AssemblyTitleAttribute("AlienForge")]
 [assembly: System.Reflection.AssemblyVersionAttribute("0.1.0.0")]

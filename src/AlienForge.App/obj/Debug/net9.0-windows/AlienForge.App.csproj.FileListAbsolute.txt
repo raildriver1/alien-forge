@@ -24,6 +24,7 @@ C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\Ali
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\AlienForge.App.AssemblyInfoInputs.cache
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\AlienForge.App.AssemblyInfo.cs
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\AlienForge.App.csproj.CoreCompileInputs.cache
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\AlienForge.App.sourcelink.json
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\AlienFor.28AAC548.Up2Date
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\AlienForge.dll
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.App\obj\Debug\net9.0-windows\refint\AlienForge.dll

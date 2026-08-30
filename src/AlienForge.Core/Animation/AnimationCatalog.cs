@@ -17,12 +17,59 @@ public sealed class AnimationClipRef
     /// <summary>Leaf file name, which is what the clip is known by.</summary>
     public string ShortName => LeafName(Entry.Name);
 
+    /// <summary>
+    /// The real names of the clips inside, recovered from the game's string tables.
+    /// Empty when the section is not listed in the master clip database.
+    /// </summary>
+    public List<ClipNameEntry> Names { get; } = new();
+
+    /// <summary>
+    /// What to show a person: the clip's own name when the section holds one clip, the
+    /// shared folder plus a count when it holds several, and the file name only as a
+    /// last resort.
+    /// </summary>
+    public string DisplayName
+    {
+        get
+        {
+            if (Names.Count == 1)
+                return Names[0].ShortName;
+            if (Names.Count > 1)
+                return $"{CommonFolder()} ({Names.Count} клипов)";
+            return ShortName;
+        }
+    }
+
+    private string CommonFolder()
+    {
+        string? shared = null;
+        foreach (var entry in Names)
+        {
+            if (shared is null)
+            {
+                shared = entry.Category;
+                continue;
+            }
+            // Trim back to the deepest folder every clip agrees on.
+            while (shared.Length > 0
+                   && !entry.Category.StartsWith(shared, StringComparison.OrdinalIgnoreCase))
+            {
+                int cut = shared.LastIndexOf('\\');
+                shared = cut > 0 ? shared[..cut] : string.Empty;
+            }
+        }
+        if (string.IsNullOrEmpty(shared))
+            return ShortName;
+        int leaf = shared.LastIndexOf('\\');
+        return leaf >= 0 && leaf + 1 < shared.Length ? shared[(leaf + 1)..] : shared;
+    }
+
     public string SizeText => Entry.Length >= 1048576
         ? $"{Entry.Length / 1048576.0:F1} MB"
         : $"{Entry.Length / 1024.0:F0} KB";
 
     public string Display
-        => $"{LeafName(Entry.Name),-52} {Entry.Length / 1024.0,8:F1} KB";
+        => $"{DisplayName,-52} {Entry.Length / 1024.0,8:F1} KB";
 
     public string Describe()
     {
@@ -107,32 +154,161 @@ public sealed class AnimationCatalog
     {
         if (string.IsNullOrWhiteSpace(modelPath))
             return null;
-        var parts = modelPath.Replace('/', '\\')
-            .Split('\\', StringSplitOptions.RemoveEmptyEntries);
+        var parts = Segments(modelPath);
         for (int i = 0; i < parts.Length - 1; i++)
             if (parts[i].Equals("CHARACTERS", StringComparison.OrdinalIgnoreCase))
                 return parts[i + 1].ToUpperInvariant();
         return null;
     }
 
-    public (uint id, string? name, Pak2Entry? entry) ResolveSkeleton(string? modelPath)
+    private static string[] Segments(string path)
+        => path.Replace('/', '\\').Split('\\', StringSplitOptions.RemoveEmptyEntries);
+
+    /// <summary>
+    /// Names worth testing as this model's skeleton, best guess first.
+    /// </summary>
+    /// <remarks>
+    /// Relying on the <c>CHARACTERS</c> folder alone is why only the Alien had
+    /// animations: any model stored under a different root, or whose folder is not
+    /// spelled exactly like its rig, resolved to nothing at all. Every folder on the
+    /// path is a candidate instead, deepest first, because a rig is named after the
+    /// character it belongs to and that is the folder the model sits in. Guessing
+    /// stays safe because a candidate is only accepted when a skeleton with that hash
+    /// is really in the archive.
+    /// </remarks>
+    public static IEnumerable<string> SkeletonCandidates(string? modelPath)
     {
-        string? name = SkeletonNameFor(modelPath);
-        if (name is null)
-            return (0, null, null);
-        uint id = Fnv1a(name);
-        _skeletons.TryGetValue(id, out var entry);
-        return (id, name, entry);
+        if (string.IsNullOrWhiteSpace(modelPath))
+            yield break;
+
+        if (SkeletonNameFor(modelPath) is string preferred)
+            yield return preferred;
+
+        var parts = Segments(modelPath);
+
+        // Deepest folder first: CHARACTERS\ALIEN\model0.cs2 tries ALIEN before
+        // CHARACTERS, and a prop under PROPS\LOCKER\model0.cs2 tries LOCKER.
+        for (int i = parts.Length - 2; i >= 0; i--)
+        {
+            string segment = parts[i].ToUpperInvariant();
+            if (segment is "CHARACTERS" or "DATA" or "ENV" or "PRODUCTION" or "MODELS")
+                continue;
+            yield return segment;
+        }
+
+        // The file itself, in case the rig is named after it rather than its folder.
+        string leaf = Path.GetFileNameWithoutExtension(parts.Length > 0 ? parts[^1] : string.Empty);
+        if (leaf.Length > 0)
+            yield return leaf.ToUpperInvariant();
     }
 
-    public string DescribeSkeleton(string? modelPath)
+    /// <summary>
+    /// Finds the skeleton for a model. <paramref name="forceId"/> overrides the guess,
+    /// which is how the interface lets a person pick a rig by hand.
+    /// </summary>
+    public (uint id, string? name, Pak2Entry? entry) ResolveSkeleton(string? modelPath,
+        uint? forceId = null)
     {
-        var (id, name, entry) = ResolveSkeleton(modelPath);
+        if (forceId is uint chosen)
+        {
+            _skeletons.TryGetValue(chosen, out var forced);
+            return (chosen, NameOfSkeleton(chosen) ?? chosen.ToString(), forced);
+        }
+
+        string? firstGuess = null;
+        foreach (string candidate in SkeletonCandidates(modelPath))
+        {
+            firstGuess ??= candidate;
+            uint id = Fnv1a(candidate);
+            if (_skeletons.TryGetValue(id, out var entry))
+                return (id, candidate, entry);
+        }
+
+        // Nothing matched: report the best guess so the message can name it.
+        return firstGuess is null ? (0, null, null) : (Fnv1a(firstGuess), firstGuess, null);
+    }
+
+    public string DescribeSkeleton(string? modelPath, uint? forceId = null)
+    {
+        var (id, name, entry) = ResolveSkeleton(modelPath, forceId);
         if (name is null)
             return "—";
         if (entry is null)
             return $"{name} (id {id}) — не найден в архиве";
         return $"{name} (id {id}, {entry.Length} B)";
+    }
+
+    // ------------------------------------------------------- skeleton listing
+    private Dictionary<uint, string>? _skeletonNames;
+
+    /// <summary>
+    /// The name of every skeleton in the archive, where one can be recovered.
+    /// </summary>
+    /// <remarks>
+    /// Skeletons are stored under a hash, not a name. The names come back by hashing
+    /// candidates and looking for the hash: the character list under
+    /// DATA\REFERENCESKELETONS first, then every string in the animation tables. A
+    /// skeleton whose name is nowhere in those stays anonymous rather than being given
+    /// an invented one.
+    /// </remarks>
+    public IReadOnlyDictionary<uint, string> SkeletonNames
+    {
+        get
+        {
+            if (_skeletonNames is not null)
+                return _skeletonNames;
+
+            var found = new Dictionary<uint, string>();
+
+            void Consider(string candidate)
+            {
+                if (candidate.Length == 0)
+                    return;
+                string upper = candidate.ToUpperInvariant();
+                uint id = Fnv1a(upper);
+                if (_skeletons.ContainsKey(id) && !found.ContainsKey(id))
+                    found[id] = upper;
+            }
+
+            foreach (string character in ReferenceSkeletons.List(_pak))
+                Consider(character);
+
+            if (found.Count < _skeletons.Count)
+                foreach (string name in ClipIndex.Resolver?.AllNames ?? new List<string>())
+                {
+                    Consider(name);
+                    // Names are namespaced; the last element is the likelier rig name.
+                    int cut = name.LastIndexOfAny(new[] { '\\', '/', ':' });
+                    if (cut >= 0 && cut + 1 < name.Length)
+                        Consider(name[(cut + 1)..]);
+                }
+
+            _skeletonNames = found;
+            return found;
+        }
+    }
+
+    public string? NameOfSkeleton(uint id)
+        => SkeletonNames.TryGetValue(id, out string? name) ? name : null;
+
+    /// <summary>Every skeleton that has clips, named where possible, for a picker.</summary>
+    public List<(uint id, string name, int clips)> ListSkeletons()
+    {
+        var counts = CountClipsPerSkeleton();
+        var result = new List<(uint, string, int)>();
+        foreach (var pair in _skeletons)
+        {
+            counts.TryGetValue(pair.Key, out int clips);
+            result.Add((pair.Key, NameOfSkeleton(pair.Key) ?? $"id {pair.Key}", clips));
+        }
+        result.Sort((a, b) =>
+        {
+            // Rigs with clips first, then alphabetically: the useful ones on top.
+            int byClips = b.Item3.CompareTo(a.Item3);
+            return byClips != 0 ? byClips
+                : string.Compare(a.Item2, b.Item2, StringComparison.OrdinalIgnoreCase);
+        });
+        return result;
     }
 
     /// <summary>Marks the start of the embedded Havok packfile inside a clip.</summary>
@@ -149,11 +325,14 @@ public sealed class AnimationCatalog
     /// reused for the whole sweep, which keeps it well under a second even though
     /// the archive holds 26048 records.
     /// </remarks>
-    public List<AnimationClipRef> ClipsFor(string? modelPath)
+    public List<AnimationClipRef> ClipsFor(string? modelPath, uint? forceSkeletonId = null)
     {
-        var (id, name, _) = ResolveSkeleton(modelPath);
+        var (id, name, skeletonEntry) = ResolveSkeleton(modelPath, forceSkeletonId);
         var result = new List<AnimationClipRef>();
-        if (name is null)
+
+        // No skeleton in the archive means no clips can belong to this model, and
+        // scanning 26048 records to prove it would just be slow.
+        if (name is null || skeletonEntry is null)
             return result;
 
         var header = new byte[16];
@@ -186,8 +365,72 @@ public sealed class AnimationCatalog
             });
         }
 
-        result.Sort((a, b) => string.Compare(a.Name, b.Name, StringComparison.OrdinalIgnoreCase));
+        // Every section is stored twice under the same name, as a 32-bit and a 64-bit
+        // packfile, and the 64-bit copy is the larger. Without collapsing them the
+        // Alien appears to have 338 containers when it has 169.
+        result = result
+            .GroupBy(r => r.ShortName, StringComparer.OrdinalIgnoreCase)
+            .Select(g => g.OrderByDescending(r => r.Entry.Length).First())
+            .ToList();
+
+        // Real names, where the index knows them.
+        var index = ClipIndex;
+        foreach (var clipRef in result)
+        {
+            uint hash = SectionHashOf(clipRef.ShortName);
+            if (hash != 0)
+                clipRef.Names.AddRange(index.ForSection(hash));
+        }
+
+        result.Sort((a, b) => string.Compare(a.DisplayName, b.DisplayName,
+            StringComparison.OrdinalIgnoreCase));
         return result;
+    }
+
+    private AnimClipIndex? _clipIndex;
+
+    /// <summary>
+    /// Names for every clip in the game, built once and reused. Parsing the string
+    /// tables and the master clip database costs a moment, so it is deferred until
+    /// something actually needs a name.
+    /// </summary>
+    public AnimClipIndex ClipIndex => _clipIndex ??= AnimClipIndex.Load(_pak);
+
+    /// <summary>
+    /// Puts the recovered names onto the clips a section decoded to.
+    /// </summary>
+    /// <remarks>
+    /// Havok hands the animations back in storage order, and the master clip database
+    /// lists them in the same order, so position lines them up. Verified on the Alien:
+    /// across the sections checked, the count the index predicts and the count Havok
+    /// returns agreed every time, and the names describe what the clips measure --
+    /// everything ending in LOOP came back as exactly one second, everything ending in
+    /// IDLE as a two frame hold.
+    /// </remarks>
+    public static int ApplyNames(AnimationClipRef clipRef, AnimationBundle bundle)
+    {
+        int applied = 0;
+        for (int i = 0; i < bundle.Clips.Count && i < clipRef.Names.Count; i++)
+        {
+            bundle.Clips[i].Name = clipRef.Names[i].FullName;
+            bundle.Clips[i].Container = clipRef.ShortName;
+            applied++;
+        }
+        return applied;
+    }
+
+    /// <summary>The hash in an <c>ANIM_CLIP_DB_SEC_&lt;hash&gt;.BIN</c> file name.</summary>
+    public static uint SectionHashOf(string sectionFileName)
+    {
+        const string prefix = "ANIM_CLIP_DB_SEC_";
+        int at = sectionFileName.IndexOf(prefix, StringComparison.OrdinalIgnoreCase);
+        if (at < 0)
+            return 0;
+        string digits = sectionFileName[(at + prefix.Length)..];
+        int dot = digits.IndexOf('.');
+        if (dot >= 0)
+            digits = digits[..dot];
+        return uint.TryParse(digits, out uint hash) ? hash : 0u;
     }
 
     /// <summary>
@@ -222,9 +465,9 @@ public sealed class AnimationCatalog
     }
 
     /// <summary>The skeleton's own Havok packfile, needed to interpret any clip.</summary>
-    public byte[]? ExtractSkeletonHavok(string? modelPath)
+    public byte[]? ExtractSkeletonHavok(string? modelPath, uint? forceSkeletonId = null)
     {
-        var (_, _, entry) = ResolveSkeleton(modelPath);
+        var (_, _, entry) = ResolveSkeleton(modelPath, forceSkeletonId);
         if (entry is null)
             return null;
 

@@ -100,6 +100,28 @@ public sealed class HavokDump
         }
     }
 
+    /// <summary>
+    /// The dumper's raw JSON for a skeleton, for inspecting what it actually reports.
+    /// </summary>
+    public string SkeletonJson(byte[] skeletonHkx)
+    {
+        string work = Path.Combine(Path.GetTempPath(),
+            "alienforge_hk_" + Guid.NewGuid().ToString("N")[..8]);
+        Directory.CreateDirectory(work);
+        try
+        {
+            string skeletonPath = Path.Combine(work, "skeleton.hkx");
+            string jsonPath = Path.Combine(work, "out.json");
+            File.WriteAllBytes(skeletonPath, skeletonHkx);
+            Run($"{Quote(skeletonPath)} {Quote(jsonPath)} --skeleton-only", work);
+            return File.Exists(jsonPath) ? File.ReadAllText(jsonPath) : string.Empty;
+        }
+        finally
+        {
+            TryDelete(work);
+        }
+    }
+
     /// <summary>Decodes just a skeleton, which is much faster than sampling a clip.</summary>
     public SkeletonData LoadSkeletonOnly(byte[] skeletonHkx)
     {
@@ -198,11 +220,18 @@ public sealed class HavokDump
             {
                 foreach (var bone in boneArray.EnumerateArray())
                 {
+                    // The shipped skeletons carry empty bone names: the release build
+                    // strips them, so the file really does say "name": "". A generated
+                    // name keeps the rig usable, and glTF needs non-empty node names
+                    // or importers invent their own.
+                    string? reported = bone.TryGetProperty("name", out var n)
+                        ? n.GetString()
+                        : null;
                     bones.Add(new BoneData
                     {
-                        Name = bone.TryGetProperty("name", out var n)
-                            ? n.GetString() ?? $"bone{bones.Count}"
-                            : $"bone{bones.Count}",
+                        Name = string.IsNullOrWhiteSpace(reported)
+                            ? $"bone{bones.Count:D3}"
+                            : reported,
                         Parent = bone.TryGetProperty("parent", out var p) ? p.GetInt32() : -1,
                         Translation = ReadVector3(bone, "t"),
                         Rotation = ReadQuaternion(bone, "r"),
@@ -222,7 +251,13 @@ public sealed class HavokDump
 
         return new AnimationBundle
         {
-            Skeleton = new SkeletonData { Bones = bones },
+            // The rig comes out of Havok in its own space; this lines it up with the
+            // CATHODE mesh so bind poses and skinning agree.
+            Skeleton = new SkeletonData
+            {
+                Bones = bones,
+                Correction = SkeletonData.HavokToCathode,
+            },
             Clips = clips,
             Fps = fps,
         };
@@ -251,11 +286,19 @@ public sealed class HavokDump
             }
         }
 
+        // Clip names are stripped too. The index inside the container is the only
+        // stable handle, so it becomes the name when there is nothing better.
+        string? reportedName = animation.TryGetProperty("name", out var n)
+            ? n.GetString()
+            : null;
+        int index = animation.TryGetProperty("index", out var idx) ? idx.GetInt32() : -1;
+
         return new ClipData
         {
-            Name = animation.TryGetProperty("name", out var n)
-                ? n.GetString() ?? "clip"
-                : "clip",
+            Name = !string.IsNullOrWhiteSpace(reportedName)
+                ? reportedName
+                : index >= 0 ? $"clip{index:D3}" : "clip",
+            Index = index,
             Duration = animation.TryGetProperty("duration", out var d)
                 ? (float)d.GetDouble()
                 : frames / Math.Max(1f, defaultFps),

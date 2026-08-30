@@ -25,12 +25,18 @@ public static class GlbValidator
         public int Images { get; set; }
         public int Materials { get; set; }
         public int BinaryBytes { get; set; }
+        public int Nodes { get; set; }
+        public int Joints { get; set; }
+        public int Animations { get; set; }
+        public int Channels { get; set; }
 
         public override string ToString()
             => Ok
                 ? $"валиден: мешей {Meshes}, примитивов {Primitives}, аксессоров {Accessors}, " +
                   $"буферных представлений {BufferViews}, изображений {Images}, " +
-                  $"материалов {Materials}, бинарных данных {BinaryBytes / 1048576.0:F2} МБ"
+                  $"материалов {Materials}, узлов {Nodes}, костей {Joints}, " +
+                  $"анимаций {Animations}, каналов {Channels}, " +
+                  $"бинарных данных {BinaryBytes / 1048576.0:F2} МБ"
                 : $"проблем {Problems.Count}: {string.Join("; ", Problems.Take(6))}";
     }
 
@@ -156,12 +162,17 @@ public static class GlbValidator
                 }
             }
 
+            var accessorInfo = new List<(int count, string type, bool hasBounds)>();
             if (root.TryGetProperty("accessors", out var accessors))
             {
                 report.Accessors = accessors.GetArrayLength();
                 int index = 0;
                 foreach (var accessor in accessors.EnumerateArray())
                 {
+                    accessorInfo.Add((
+                        accessor.GetProperty("count").GetInt32(),
+                        accessor.GetProperty("type").GetString() ?? "",
+                        accessor.TryGetProperty("min", out _) && accessor.TryGetProperty("max", out _)));
                     int viewIndex = accessor.TryGetProperty("bufferView", out var bv)
                         ? bv.GetInt32() : -1;
                     int count = accessor.GetProperty("count").GetInt32();
@@ -207,8 +218,186 @@ public static class GlbValidator
 
             if (!root.TryGetProperty("scenes", out var scenes) || scenes.GetArrayLength() == 0)
                 report.Problems.Add("нет ни одной сцены");
+
+            ValidateNodes(root, report);
+            ValidateSkins(root, report, accessorInfo);
+            ValidateAnimations(root, report, accessorInfo);
         }
 
         return report;
+    }
+
+    /// <summary>
+    /// Node indices stay in range and the hierarchy is a forest. A bone claimed by two
+    /// parents is the mistake a hand-built skeleton makes, and it turns into a mangled
+    /// rig rather than a load error, so it is worth catching here.
+    /// </summary>
+    private static void ValidateNodes(JsonElement root, Report report)
+    {
+        if (!root.TryGetProperty("nodes", out var nodes))
+            return;
+
+        report.Nodes = nodes.GetArrayLength();
+        var parentOf = new int[report.Nodes];
+        Array.Fill(parentOf, -1);
+
+        int index = 0;
+        foreach (var node in nodes.EnumerateArray())
+        {
+            if (node.TryGetProperty("children", out var children))
+            {
+                if (children.GetArrayLength() == 0)
+                    report.Problems.Add($"узел {index}: пустой массив children");
+                foreach (var child in children.EnumerateArray())
+                {
+                    int c = child.GetInt32();
+                    if (c < 0 || c >= report.Nodes)
+                    {
+                        report.Problems.Add($"узел {index}: ребёнок {c} вне диапазона");
+                        continue;
+                    }
+                    if (c == index)
+                        report.Problems.Add($"узел {index} указан своим же ребёнком");
+                    else if (parentOf[c] >= 0)
+                        report.Problems.Add(
+                            $"узел {c} есть у двух родителей: {parentOf[c]} и {index}");
+                    else
+                        parentOf[c] = index;
+                }
+            }
+            index++;
+        }
+    }
+
+    private static void ValidateSkins(JsonElement root, Report report,
+        List<(int count, string type, bool hasBounds)> accessorInfo)
+    {
+        if (!root.TryGetProperty("skins", out var skins))
+            return;
+
+        int index = 0;
+        foreach (var skin in skins.EnumerateArray())
+        {
+            if (!skin.TryGetProperty("joints", out var joints) || joints.GetArrayLength() == 0)
+            {
+                report.Problems.Add($"скин {index}: нет костей");
+                index++;
+                continue;
+            }
+
+            int jointCount = joints.GetArrayLength();
+            report.Joints += jointCount;
+            foreach (var joint in joints.EnumerateArray())
+            {
+                int j = joint.GetInt32();
+                if (j < 0 || j >= report.Nodes)
+                    report.Problems.Add($"скин {index}: кость ссылается на узел {j} вне диапазона");
+            }
+
+            if (skin.TryGetProperty("inverseBindMatrices", out var ibm))
+            {
+                int accessor = ibm.GetInt32();
+                if (accessor < 0 || accessor >= accessorInfo.Count)
+                {
+                    report.Problems.Add($"скин {index}: неверный аксессор inverseBindMatrices");
+                }
+                else
+                {
+                    var info = accessorInfo[accessor];
+                    if (info.count != jointCount)
+                        report.Problems.Add(
+                            $"скин {index}: матриц {info.count}, а костей {jointCount}");
+                    if (info.type != "MAT4")
+                        report.Problems.Add(
+                            $"скин {index}: inverseBindMatrices типа {info.type}, нужен MAT4");
+                }
+            }
+            index++;
+        }
+    }
+
+    private static void ValidateAnimations(JsonElement root, Report report,
+        List<(int count, string type, bool hasBounds)> accessorInfo)
+    {
+        if (!root.TryGetProperty("animations", out var animations))
+            return;
+
+        report.Animations = animations.GetArrayLength();
+        int index = 0;
+        foreach (var animation in animations.EnumerateArray())
+        {
+            bool hasSamplers = animation.TryGetProperty("samplers", out var samplers)
+                               && samplers.ValueKind == JsonValueKind.Array;
+            int samplerCount = hasSamplers ? samplers.GetArrayLength() : 0;
+
+            if (samplerCount == 0)
+                report.Problems.Add($"анимация {index}: нет сэмплеров");
+
+            if (hasSamplers)
+            {
+                int samplerIndex = 0;
+                foreach (var sampler in samplers.EnumerateArray())
+                {
+                    int input = sampler.GetProperty("input").GetInt32();
+                    int output = sampler.GetProperty("output").GetInt32();
+
+                    if (input < 0 || input >= accessorInfo.Count
+                        || output < 0 || output >= accessorInfo.Count)
+                    {
+                        report.Problems.Add(
+                            $"анимация {index}, сэмплер {samplerIndex}: аксессор вне диапазона");
+                        samplerIndex++;
+                        continue;
+                    }
+
+                    var inputInfo = accessorInfo[input];
+                    var outputInfo = accessorInfo[output];
+
+                    // The spec requires bounds on a sampler input; without them a player
+                    // cannot tell how long the clip runs.
+                    if (!inputInfo.hasBounds)
+                        report.Problems.Add(
+                            $"анимация {index}, сэмплер {samplerIndex}: у времени нет min/max");
+                    if (inputInfo.type != "SCALAR")
+                        report.Problems.Add(
+                            $"анимация {index}, сэмплер {samplerIndex}: время типа {inputInfo.type}");
+                    if (inputInfo.count != outputInfo.count)
+                        report.Problems.Add(
+                            $"анимация {index}, сэмплер {samplerIndex}: кадров {inputInfo.count}, " +
+                            $"значений {outputInfo.count}");
+                    samplerIndex++;
+                }
+            }
+
+            if (animation.TryGetProperty("channels", out var channels))
+            {
+                report.Channels += channels.GetArrayLength();
+                if (channels.GetArrayLength() == 0)
+                    report.Problems.Add($"анимация {index}: нет каналов");
+
+                foreach (var channel in channels.EnumerateArray())
+                {
+                    int sampler = channel.GetProperty("sampler").GetInt32();
+                    if (sampler < 0 || sampler >= samplerCount)
+                        report.Problems.Add(
+                            $"анимация {index}: канал ссылается на сэмплер {sampler}");
+
+                    var target = channel.GetProperty("target");
+                    string path = target.TryGetProperty("path", out var p)
+                        ? p.GetString() ?? "" : "";
+                    if (path is not ("translation" or "rotation" or "scale" or "weights"))
+                        report.Problems.Add($"анимация {index}: неизвестный путь '{path}'");
+
+                    if (target.TryGetProperty("node", out var n))
+                    {
+                        int node = n.GetInt32();
+                        if (node < 0 || node >= report.Nodes)
+                            report.Problems.Add(
+                                $"анимация {index}: канал указывает на узел {node} вне диапазона");
+                    }
+                }
+            }
+            index++;
+        }
     }
 }

@@ -10,3 +10,7 @@ C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\Al
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\refint\AlienForge.Core.dll
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.pdb
 C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\ref\AlienForge.Core.dll
+C:\Users\8888\Desktop\_af_bin\AlienForge.Core.deps.json
+C:\Users\8888\Desktop\_af_bin\AlienForge.Core.dll
+C:\Users\8888\Desktop\_af_bin\AlienForge.Core.pdb
+C:\Users\8888\Desktop\AlienForge\src\AlienForge.Core\obj\Debug\net9.0-windows\AlienForge.Core.sourcelink.json

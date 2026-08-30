@@ -14,7 +14,27 @@ public sealed class BoneData
 
 public sealed class SkeletonData
 {
+    /// <summary>
+    /// Puts a Havok rig into the space CATHODE geometry lives in.
+    /// </summary>
+    /// <remarks>
+    /// Measured on the Alien: the mesh bounding box is 1.48 x 2.71 x 4.39 m while the
+    /// skeleton's joint cloud is 1.41 x 4.00 x 2.59 m. Y and Z are swapped, and after
+    /// swapping them back every axis of the rig comes out slightly smaller than the
+    /// mesh (0.95, 0.96, 0.91), which is what a skeleton sitting inside its skin looks
+    /// like. The transform that does it is a -90 degree turn about X, taking
+    /// (x, y, z) to (x, z, -y). Without it the posed mesh scatters: mean vertex
+    /// displacement was 3.06 m and 98% of vertices moved over half a metre.
+    /// </remarks>
+    public static readonly Matrix4x4 HavokToCathode = Matrix4x4.CreateRotationX(-MathF.PI / 2f);
+
     public required List<BoneData> Bones { get; init; }
+
+    /// <summary>
+    /// Applied to the root bones, which carries it to the whole rig through the
+    /// hierarchy. Identity leaves the skeleton in its source space.
+    /// </summary>
+    public Matrix4x4 Correction { get; init; } = Matrix4x4.Identity;
 
     public int Count => Bones.Count;
 
@@ -30,7 +50,7 @@ public sealed class SkeletonData
             // forward pass is enough.
             world[i] = bone.Parent >= 0 && bone.Parent < i
                 ? local * world[bone.Parent]
-                : local;
+                : local * Correction;
         }
         return world;
     }
@@ -70,7 +90,29 @@ public sealed class TrackData
 
 public sealed class ClipData
 {
-    public required string Name { get; init; }
+    /// <summary>
+    /// Settable because the real name does not come from the Havok data. The shipped
+    /// packfiles have their names stripped, so the dumper reports a placeholder and the
+    /// clip index fills in the name afterwards.
+    /// </summary>
+    public required string Name { get; set; }
+
+    /// <summary>Position inside its container, or -1 when the dumper did not say.</summary>
+    public int Index { get; init; } = -1;
+
+    /// <summary>Container the clip came from, for telling identically named clips apart.</summary>
+    public string? Container { get; set; }
+
+    /// <summary>Last path element of <see cref="Name"/>, which is what a person reads.</summary>
+    public string ShortName
+    {
+        get
+        {
+            int cut = Name.LastIndexOfAny(new[] { '\\', '/' });
+            return cut >= 0 && cut + 1 < Name.Length ? Name[(cut + 1)..] : Name;
+        }
+    }
+
     public float Duration { get; init; }
     public int Frames { get; init; }
     public float Fps { get; init; } = 30f;
@@ -81,7 +123,7 @@ public sealed class ClipData
     public bool IsAdditive => BlendHint != 0;
 
     public override string ToString()
-        => $"{Name}  {Frames} кадр., {Duration:F2} с";
+        => $"{ShortName}  {Frames} кадр., {Duration:F2} с{(IsAdditive ? ", аддитивный" : "")}";
 }
 
 /// <summary>A decoded skeleton plus every clip that came out of one dump.</summary>
@@ -99,6 +141,16 @@ public sealed class AnimationBundle
 public static class PoseEvaluator
 {
     /// <summary>Bone matrices in model space for one frame.</summary>
+    /// <remarks>
+    /// A channel holding a single key carries no motion, and this game's clips leave
+    /// such channels at a placeholder rather than at the reference value. Measured on
+    /// the Alien: the root bone's reference rotation is the Y/Z swap that puts the rig
+    /// into CATHODE space, while the clip supplies one identity key for it. Bone 1
+    /// cancels that swap for its children, so honouring the placeholder swings
+    /// everything below the root by 90 degrees and scatters the mesh. Every other
+    /// static channel in the clip matched the reference exactly, so treating a
+    /// one-key channel as "not animated" both keeps those values and repairs the root.
+    /// </remarks>
     public static Matrix4x4[] WorldPose(SkeletonData skeleton, ClipData? clip, int frame)
     {
         var byBone = new TrackData?[skeleton.Count];
@@ -107,6 +159,10 @@ public static class PoseEvaluator
                 if (track.Bone >= 0 && track.Bone < byBone.Length)
                     byBone[track.Bone] = track;
 
+        // A genuinely single-frame clip has one key everywhere, and there the keys are
+        // the only data there is.
+        bool oneKeyMeansUnset = clip is { Frames: > 1 };
+
         var world = new Matrix4x4[skeleton.Count];
         for (int i = 0; i < skeleton.Count; i++)
         {
@@ -114,9 +170,12 @@ public static class PoseEvaluator
             var track = byBone[i];
 
             // Bones the clip does not touch keep their bind pose.
-            Vector3 t = track?.TranslationAt(frame, bone.Translation) ?? bone.Translation;
-            Quaternion r = track?.RotationAt(frame, bone.Rotation) ?? bone.Rotation;
-            Vector3 s = track?.ScaleAt(frame, bone.Scale) ?? bone.Scale;
+            Vector3 t = Animated(track?.Translation, oneKeyMeansUnset)
+                ? track!.TranslationAt(frame, bone.Translation) : bone.Translation;
+            Quaternion r = Animated(track?.Rotation, oneKeyMeansUnset)
+                ? track!.RotationAt(frame, bone.Rotation) : bone.Rotation;
+            Vector3 s = Animated(track?.Scale, oneKeyMeansUnset)
+                ? track!.ScaleAt(frame, bone.Scale) : bone.Scale;
 
             if (r.LengthSquared() > 1e-8f)
                 r = Quaternion.Normalize(r);
@@ -126,10 +185,14 @@ public static class PoseEvaluator
             Matrix4x4 local = SkeletonData.Compose(t, r, s);
             world[i] = bone.Parent >= 0 && bone.Parent < i
                 ? local * world[bone.Parent]
-                : local;
+                : local * skeleton.Correction;
         }
         return world;
     }
+
+    /// <summary>Whether a channel carries motion worth using instead of the bind pose.</summary>
+    private static bool Animated<T>(T[]? values, bool oneKeyMeansUnset)
+        => values is not null && values.Length > (oneKeyMeansUnset ? 1 : 0);
 
     /// <summary>
     /// Skinning matrices: inverse bind followed by the animated pose. Multiplying a

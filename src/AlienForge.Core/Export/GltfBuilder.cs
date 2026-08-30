@@ -171,6 +171,133 @@ public sealed class GltfBuilder
         return AddAccessor(view, ComponentUnsignedShort, indices.Count, "SCALAR");
     }
 
+    // -------------------------------------------------------------- skinning
+    /// <summary>JOINTS_0: four bone indices per vertex, as unsigned shorts.</summary>
+    public int AddJoints(ushort[] joints)
+    {
+        int vertices = joints.Length / 4;
+        var bytes = new byte[vertices * 8];
+        for (int i = 0; i < vertices * 4; i++)
+            BinaryPrimitives.WriteUInt16LittleEndian(bytes.AsSpan(i * 2, 2), joints[i]);
+        int view = AddBufferView(bytes, TargetArrayBuffer);
+        return AddAccessor(view, ComponentUnsignedShort, vertices, "VEC4");
+    }
+
+    /// <summary>
+    /// Matrices for skins and animation output. glTF wants 16 floats in column-major
+    /// order; System.Numerics uses the row-vector convention, so writing its fields in
+    /// row order (M11..M44) already produces the layout the spec asks for, translation
+    /// included. No transpose needed.
+    /// </summary>
+    public int AddMatrices(IReadOnlyList<Matrix4x4> matrices)
+    {
+        var bytes = new byte[matrices.Count * 64];
+        // Allocated once: a stackalloc inside the loop grows the frame per matrix.
+        Span<float> f = stackalloc float[16];
+        for (int i = 0; i < matrices.Count; i++)
+        {
+            Matrix4x4 m = matrices[i];
+            f[0] = m.M11; f[1] = m.M12; f[2] = m.M13; f[3] = m.M14;
+            f[4] = m.M21; f[5] = m.M22; f[6] = m.M23; f[7] = m.M24;
+            f[8] = m.M31; f[9] = m.M32; f[10] = m.M33; f[11] = m.M34;
+            f[12] = m.M41; f[13] = m.M42; f[14] = m.M43; f[15] = m.M44;
+            for (int k = 0; k < 16; k++)
+                BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 64 + k * 4, 4), f[k]);
+        }
+        // No bufferView target: targets describe vertex and index data only.
+        int view = AddBufferView(bytes);
+        return AddAccessor(view, ComponentFloat, matrices.Count, "MAT4");
+    }
+
+    public int AddSkin(string name, IReadOnlyList<int> jointNodes, int inverseBindMatrices,
+        int? skeletonRoot = null)
+    {
+        var joints = new JsonArray();
+        foreach (int j in jointNodes)
+            joints.Add(j);
+
+        var skin = new JsonObject
+        {
+            ["name"] = name,
+            ["joints"] = joints,
+            ["inverseBindMatrices"] = inverseBindMatrices,
+        };
+        if (skeletonRoot is not null)
+            skin["skeleton"] = skeletonRoot.Value;
+        _skins.Add(skin);
+        return _skins.Count - 1;
+    }
+
+    // ------------------------------------------------------------- animation
+    /// <summary>
+    /// Keyframe times. The spec requires min/max on an animation sampler's input, so
+    /// players know the clip's extent without scanning the buffer.
+    /// </summary>
+    public int AddTimes(IReadOnlyList<float> times)
+    {
+        var bytes = new byte[times.Count * 4];
+        float min = float.MaxValue, max = float.MinValue;
+        for (int i = 0; i < times.Count; i++)
+        {
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 4, 4), times[i]);
+            min = MathF.Min(min, times[i]);
+            max = MathF.Max(max, times[i]);
+        }
+        if (times.Count == 0) { min = 0f; max = 0f; }
+
+        int view = AddBufferView(bytes);
+        return AddAccessor(view, ComponentFloat, times.Count, "SCALAR",
+            new[] { min }, new[] { max });
+    }
+
+    /// <summary>VEC3 animation output. Untargeted, unlike the vertex-attribute variant.</summary>
+    public int AddVec3Output(IReadOnlyList<Vector3> values)
+    {
+        var bytes = new byte[values.Count * 12];
+        for (int i = 0; i < values.Count; i++)
+        {
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 12 + 0, 4), values[i].X);
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 12 + 4, 4), values[i].Y);
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 12 + 8, 4), values[i].Z);
+        }
+        int view = AddBufferView(bytes);
+        return AddAccessor(view, ComponentFloat, values.Count, "VEC3");
+    }
+
+    /// <summary>Rotation output, written as (x, y, z, w) to match glTF.</summary>
+    public int AddQuaternionOutput(IReadOnlyList<Quaternion> values)
+    {
+        var bytes = new byte[values.Count * 16];
+        for (int i = 0; i < values.Count; i++)
+        {
+            Quaternion q = values[i];
+            if (q.LengthSquared() > 1e-8f)
+                q = Quaternion.Normalize(q);
+            else
+                q = Quaternion.Identity;
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 16 + 0, 4), q.X);
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 16 + 4, 4), q.Y);
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 16 + 8, 4), q.Z);
+            BinaryPrimitives.WriteSingleLittleEndian(bytes.AsSpan(i * 16 + 12, 4), q.W);
+        }
+        int view = AddBufferView(bytes);
+        return AddAccessor(view, ComponentFloat, values.Count, "VEC4");
+    }
+
+    public int AddAnimation(string name, JsonArray channels, JsonArray samplers)
+    {
+        _animations.Add(new JsonObject
+        {
+            ["name"] = name,
+            ["channels"] = channels,
+            ["samplers"] = samplers,
+        });
+        return _animations.Count - 1;
+    }
+
+    public int SkinCount => _skins.Count;
+    public int AnimationCount => _animations.Count;
+
     // ---------------------------------------------------------------- images
     public int AddPngImage(byte[] png, string name)
     {

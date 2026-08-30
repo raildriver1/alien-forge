@@ -154,10 +154,14 @@
           </Grid.RowDefinitions>
 
           <TabControl Grid.Row="0" x:Name="PreviewTabs" Margin="6,4,6,0">
-            <TabItem Header="{Binding [TAB_MAP], Source={x:Static local:Loc.Current}}" />
-            <TabItem Header="{Binding [TAB_MODEL], Source={x:Static local:Loc.Current}}" />
-            <TabItem Header="{Binding [TAB_TEXTURE], Source={x:Static local:Loc.Current}}" />
-            <TabItem Header="{Binding [TAB_ANIMATION], Source={x:Static local:Loc.Current}}" />
+            <TabItem x:Name="TabMapItem"
+                     Header="{Binding [TAB_MAP], Source={x:Static local:Loc.Current}}" />
+            <TabItem x:Name="TabModelItem"
+                     Header="{Binding [TAB_MODEL], Source={x:Static local:Loc.Current}}" />
+            <TabItem x:Name="TabTextureItem"
+                     Header="{Binding [TAB_TEXTURE], Source={x:Static local:Loc.Current}}" />
+            <TabItem x:Name="TabAnimationItem"
+                     Header="{Binding [TAB_ANIMATION], Source={x:Static local:Loc.Current}}" />
             <TabItem Header="{Binding [TAB_INFO], Source={x:Static local:Loc.Current}}" />
           </TabControl>
 
@@ -176,13 +180,21 @@
 
             <!-- model pane -->
             <Grid x:Name="ModelPane" Visibility="Collapsed">
-              <Border Background="#101113" CornerRadius="5" ClipToBounds="True">
-                <Viewport3D x:Name="Viewport"
-                            MouseLeftButtonDown="OnViewportMouseDown"
-                            MouseRightButtonDown="OnViewportMouseDown"
-                            MouseUp="OnViewportMouseUp"
-                            MouseMove="OnViewportMouseMove"
-                            MouseWheel="OnViewportWheel">
+              <!--
+                Mouse handling lives on this Border, not on the Viewport3D. A Viewport3D
+                only reports a hit when the pointer is actually over a 3D object, so
+                handlers placed there ignore every click on empty space and the camera
+                appears to work only while hovering the model. The Border has a
+                background, so it takes the whole area.
+              -->
+              <Border x:Name="ViewportHost" Background="#101113" CornerRadius="5"
+                      ClipToBounds="True" Focusable="True"
+                      MouseDown="OnViewportMouseDown"
+                      MouseMove="OnViewportMouseMove"
+                      MouseUp="OnViewportMouseUp"
+                      MouseWheel="OnViewportWheel"
+                      KeyDown="OnViewportKeyDown">
+                <Viewport3D x:Name="Viewport" IsHitTestVisible="False">
                   <Viewport3D.Camera>
                     <PerspectiveCamera x:Name="Camera" Position="0,1,4"
                                        LookDirection="0,0,-1" UpDirection="0,1,0"
@@ -206,6 +218,115 @@
               <TextBlock x:Name="ModelEmpty" HorizontalAlignment="Center"
                          VerticalAlignment="Center" Style="{StaticResource Dim}"
                          Text="{Binding [MODEL_PICK], Source={x:Static local:Loc.Current}}" />
+
+              <!-- parts and lighting, over the viewport so the model stays as large as possible -->
+              <Border VerticalAlignment="Stretch" HorizontalAlignment="Right" Margin="10"
+                      Width="290" Background="#E61A1C1F" CornerRadius="5" Padding="10"
+                      BorderBrush="{StaticResource Line}" BorderThickness="1">
+                <Grid>
+                  <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="*" />
+                    <RowDefinition Height="Auto" />
+                    <RowDefinition Height="Auto" />
+                  </Grid.RowDefinitions>
+
+                  <StackPanel Grid.Row="0" Orientation="Horizontal" Margin="0,0,0,6">
+                    <TextBlock FontWeight="SemiBold"
+                               Text="{Binding [PARTS_TITLE], Source={x:Static local:Loc.Current}}" />
+                    <TextBlock Margin="6,0,0,0" Style="{StaticResource Dim}" Text="(" />
+                    <TextBlock x:Name="PartCount" Style="{StaticResource Dim}" Text="0" />
+                    <TextBlock Style="{StaticResource Dim}" Text=")" />
+                  </StackPanel>
+
+                  <ListBox Grid.Row="1" x:Name="PartList" MinHeight="120"
+                           SelectionChanged="OnPartSelected"
+                           HorizontalContentAlignment="Stretch"
+                           ScrollViewer.HorizontalScrollBarVisibility="Disabled">
+                    <ListBox.ItemTemplate>
+                      <DataTemplate>
+                        <Grid>
+                          <Grid.ColumnDefinitions>
+                            <ColumnDefinition Width="Auto" />
+                            <ColumnDefinition Width="*" />
+                          </Grid.ColumnDefinitions>
+                          <CheckBox Grid.Column="0" VerticalAlignment="Center" Margin="0,0,6,0"
+                                    IsChecked="{Binding Visible, Mode=OneTime}"
+                                    Checked="OnPartVisibilityChanged"
+                                    Unchecked="OnPartVisibilityChanged" />
+                          <TextBlock Grid.Column="1" Text="{Binding Display}"
+                                     TextTrimming="CharacterEllipsis" VerticalAlignment="Center"
+                                     ToolTip="{Binding Display}" />
+                        </Grid>
+                      </DataTemplate>
+                    </ListBox.ItemTemplate>
+                  </ListBox>
+
+                  <Grid Grid.Row="2" Margin="0,6,0,0">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="*" />
+                      <ColumnDefinition Width="8" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <Button Grid.Column="0" Click="OnIsolatePart"
+                            Content="{Binding [PARTS_ISOLATE], Source={x:Static local:Loc.Current}}" />
+                    <Button Grid.Column="2" Click="OnShowAllParts"
+                            Content="{Binding [PARTS_SHOW_ALL], Source={x:Static local:Loc.Current}}" />
+                  </Grid>
+
+                  <StackPanel Grid.Row="3" Margin="0,12,0,0">
+                    <Separator Margin="0,0,0,8" />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,6">
+                      <TextBlock FontWeight="SemiBold"
+                                 Text="{Binding [LIGHT_TITLE], Source={x:Static local:Loc.Current}}" />
+                      <TextBlock x:Name="LightReadout" Margin="8,0,0,0"
+                                 Style="{StaticResource Dim}" Text="215° / 35°" />
+                    </StackPanel>
+
+                    <TextBlock Style="{StaticResource Dim}"
+                               Text="{Binding [LIGHT_AZIMUTH], Source={x:Static local:Loc.Current}}" />
+                    <Slider x:Name="LightAzimuth" Minimum="0" Maximum="360" Value="215"
+                            ValueChanged="OnLightAzimuthChanged" />
+
+                    <TextBlock Style="{StaticResource Dim}"
+                               Text="{Binding [LIGHT_ELEVATION], Source={x:Static local:Loc.Current}}" />
+                    <Slider x:Name="LightElevation" Minimum="-85" Maximum="85" Value="35"
+                            ValueChanged="OnLightElevationChanged" />
+
+                    <TextBlock Style="{StaticResource Dim}"
+                               Text="{Binding [LIGHT_INTENSITY], Source={x:Static local:Loc.Current}}" />
+                    <Slider x:Name="LightIntensity" Minimum="0" Maximum="2" Value="1"
+                            ValueChanged="OnLightIntensityChanged" />
+
+                    <TextBlock Style="{StaticResource Dim}"
+                               Text="{Binding [LIGHT_AMBIENT], Source={x:Static local:Loc.Current}}" />
+                    <Slider x:Name="AmbientLevel" Minimum="0" Maximum="1" Value="0.34"
+                            ValueChanged="OnAmbientChanged" />
+
+                    <Grid Margin="0,8,0,0">
+                      <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*" />
+                        <ColumnDefinition Width="Auto" />
+                      </Grid.ColumnDefinitions>
+                      <CheckBox Grid.Column="0" x:Name="FollowCameraCheck"
+                                VerticalAlignment="Center"
+                                Checked="OnLightFollowCamera" Unchecked="OnLightFollowCamera"
+                                Content="{Binding [LIGHT_FOLLOW], Source={x:Static local:Loc.Current}}" />
+                      <Button Grid.Column="1" Click="OnResetLight" Padding="8,3"
+                              Content="{Binding [LIGHT_RESET], Source={x:Static local:Loc.Current}}" />
+                    </Grid>
+
+                    <Separator Margin="0,10,0,8" />
+                    <TextBlock FontWeight="SemiBold"
+                               Text="{Binding [CAM_TITLE], Source={x:Static local:Loc.Current}}" />
+                    <CheckBox x:Name="FollowModelCheck" Margin="0,4,0,0" IsChecked="True"
+                              Content="{Binding [CAM_FOLLOW_MODEL], Source={x:Static local:Loc.Current}}" />
+                    <TextBlock Style="{StaticResource Dim}" Margin="0,6,0,0"
+                               TextWrapping="Wrap"
+                               Text="{Binding [CAM_HELP], Source={x:Static local:Loc.Current}}" />
+                  </StackPanel>
+                </Grid>
+              </Border>
             </Grid>
 
             <!-- texture pane -->
@@ -239,10 +360,33 @@
               <Border Grid.Row="0" Style="{StaticResource Card}" Padding="12,10"
                       Margin="0,0,0,8">
                 <StackPanel>
-                  <TextBlock x:Name="AnimationSummary"
+                  <TextBlock x:Name="AnimationSummary" TextWrapping="Wrap"
                              Text="{Binding [ANIM_STEP1], Source={x:Static local:Loc.Current}}" />
+
+                  <!--
+                    The rig picker sits in the card rather than the toolbar row. Sharing that
+                    row meant it was the first control squeezed off a narrow window, and it is
+                    the one that matters most: a model's folder does not always name its rig,
+                    and androids are the plain case of it.
+                  -->
+                  <Grid Margin="0,8,0,0">
+                    <Grid.ColumnDefinitions>
+                      <ColumnDefinition Width="Auto" />
+                      <ColumnDefinition Width="320" />
+                      <ColumnDefinition Width="*" />
+                    </Grid.ColumnDefinitions>
+                    <TextBlock Grid.Column="0" VerticalAlignment="Center" Margin="0,0,8,0"
+                               Style="{StaticResource Dim}"
+                               Text="{Binding [ANIM_SKELETON_PICK], Source={x:Static local:Loc.Current}}" />
+                    <ComboBox Grid.Column="1" x:Name="SkeletonPicker" VerticalAlignment="Center"
+                              SelectionChanged="OnSkeletonPicked" />
+                    <TextBlock Grid.Column="2" x:Name="SkeletonNote" VerticalAlignment="Center"
+                               Margin="12,0,0,0" Style="{StaticResource Dim}"
+                               TextTrimming="CharacterEllipsis" />
+                  </Grid>
+
                   <TextBlock x:Name="AnimationHelp" Style="{StaticResource Dim}"
-                             TextWrapping="Wrap" Margin="0,6,0,0"
+                             TextWrapping="Wrap" Margin="0,8,0,0"
                              Text="{Binding [ANIM_ABOUT], Source={x:Static local:Loc.Current}}" />
                 </StackPanel>
               </Border>
@@ -276,12 +420,18 @@
                         Click="OnExportAllAnimations"
                         Content="{Binding [ANIM_EXPORT_ALL], Source={x:Static local:Loc.Current}}" />
 
+                <Button Grid.Column="5" x:Name="ExportRawClipButton" IsEnabled="False"
+                        HorizontalAlignment="Left" Margin="8,0,0,0"
+                        Click="OnExportAnimationRaw"
+                        Content="{Binding [ANIM_EXPORT_RAW], Source={x:Static local:Loc.Current}}" />
+
                 <TextBlock Grid.Column="6" Style="{StaticResource Dim}"
                            VerticalAlignment="Center" Margin="0,0,8,0"
                            Text="{Binding [FILTER], Source={x:Static local:Loc.Current}}" />
                 <TextBox Grid.Column="7" x:Name="ClipFilterBox" VerticalAlignment="Center"
                          TextChanged="OnClipFilterChanged" />
               </Grid>
+
 
               <Grid Grid.Row="3" Margin="0,8,0,0">
                 <Grid.ColumnDefinitions>
