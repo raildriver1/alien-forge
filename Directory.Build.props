@@ -23,4 +23,37 @@
     <Authors>AlienForge</Authors>
   </PropertyGroup>
 
+  <!--
+    hkdump.exe is the Havok unpacker HavokDump drives to decode skeletons and
+    spline-compressed clips. It looks next to the executable first, so every
+    project that can run an export needs its own copy.
+
+    Kept in tools\ inside the repo on purpose. This used to point at
+    $(USERPROFILE)\Desktop\_havoklib\build\hkdump_bin\, which meant the build
+    silently produced an exporter that could not write bone weights the moment
+    that folder went away. A path under the solution cannot go stale like that.
+
+    Missing is still not an error: everything except skeletons and animations
+    works without it.
+  -->
+  <PropertyGroup>
+    <HavokDumperPath Condition="'$(HavokDumperPath)' == ''">$(MSBuildThisFileDirectory)tools\hkdump.exe</HavokDumperPath>
+  </PropertyGroup>
+
+  <Target Name="CopyHavokDumperToOutput" AfterTargets="Build"
+          Condition="'$(OutputType)' == 'Exe' or '$(OutputType)' == 'WinExe'">
+    <Warning Condition="!Exists('$(HavokDumperPath)')"
+             Text="hkdump.exe not found at $(HavokDumperPath); skeleton and animation export will be unavailable." />
+    <Copy Condition="Exists('$(HavokDumperPath)')"
+          SourceFiles="$(HavokDumperPath)" DestinationFolder="$(OutDir)"
+          SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
+  <Target Name="CopyHavokDumperToPublish" AfterTargets="Publish"
+          Condition="'$(OutputType)' == 'Exe' or '$(OutputType)' == 'WinExe'">
+    <Copy Condition="Exists('$(HavokDumperPath)')"
+          SourceFiles="$(HavokDumperPath)" DestinationFolder="$(PublishDir)"
+          SkipUnchangedFiles="true" ContinueOnError="true" />
+  </Target>
+
 </Project>

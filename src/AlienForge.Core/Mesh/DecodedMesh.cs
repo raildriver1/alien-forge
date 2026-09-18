@@ -23,6 +23,12 @@ public sealed class DecodedMesh
     public Vector2[]? Uv0 { get; init; }
     public Vector2[]? Uv1 { get; init; }
 
+    /// <summary>Цвет вершин (COLOR0) RGBA 0..1: шейдеры умножают на него альбедо (VERTEX_COLOUR) и берут вес грязи.</summary>
+    public Vector4[]? Colors { get; init; }
+
+    /// <summary>Второй набор цветов (COLOR1), если есть.</summary>
+    public Vector4[]? Colors1 { get; init; }
+
     /// <summary>Global bone indices, already run through the submesh bone palette.</summary>
     public ushort[]? Joints { get; init; }
 

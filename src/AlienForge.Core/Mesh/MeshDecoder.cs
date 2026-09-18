@@ -55,6 +55,8 @@ public static class MeshDecoder
         Vector4[]? tangents = ReadTangents(data, layout, vc);
         Vector2[]? uv0 = ReadTexCoord(data, layout, vc, 0);
         Vector2[]? uv1 = ReadTexCoord(data, layout, vc, 1);
+        Vector4[]? colors = ReadColors(data, layout, vc, 0);
+        Vector4[]? colors1 = ReadColors(data, layout, vc, 1);
         ReadSkin(data, layout, vc, sm.Bones, warnings, out ushort[]? joints, out Vector4[]? weights);
         int[] indices = ReadIndices(data, layout, sm.IndexCount, vc, warnings);
 
@@ -71,6 +73,8 @@ public static class MeshDecoder
             Tangents = tangents,
             Uv0 = uv0,
             Uv1 = uv1,
+            Colors = colors,
+            Colors1 = colors1,
             Joints = joints,
             Weights = weights,
             Indices = indices,
@@ -171,6 +175,34 @@ public static class MeshDecoder
         return result;
     }
 
+    /// <summary>Только цвет вершин сабмеша (для экспорта уровня, где геометрию читает CathodeLib).</summary>
+    public static Vector4[]? ReadVertexColors(Models.CS2.Component.LOD.Submesh sm, int index = 0)
+    {
+        var layout = VertexLayout.Plan(sm.VertexFormatFull, sm.VertexCount, sm.IndexCount);
+        if (layout is null || sm.VertexCount == 0 || sm.Data is null || sm.Data.Length < layout.TotalSize)
+            return null;
+        return ReadColors(sm.Data, layout, sm.VertexCount, index);
+    }
+
+    /// <summary>Цвет вершин. D3DCOLOR лежит в памяти как B,G,R,A — переставляем в RGBA.</summary>
+    private static Vector4[]? ReadColors(byte[] data, VertexLayout layout, int vc, int index)
+    {
+        if (!layout.TryGet(Usage.Color, index, out var slot))
+            return null;
+        var result = new Vector4[vc];
+        for (int i = 0; i < vc; i++)
+        {
+            int at = layout.OffsetOf(slot, i);
+            var v = ReadRaw(data, at, slot.Type);
+            if (slot.Type == VType.Color)
+                v = new Vector4(v.Z, v.Y, v.X, v.W) / 255.0f;
+            else if (slot.Type == VType.U8_4)
+                v /= 255.0f;
+            result[i] = Vector4.Clamp(v, Vector4.Zero, Vector4.One);
+        }
+        return result;
+    }
+
     private static Vector2[]? ReadTexCoord(byte[] data, VertexLayout layout, int vc, int index)
     {
         if (!layout.TryGet(Usage.TexCoord, index, out var slot))
@@ -184,7 +216,13 @@ public static class MeshDecoder
             {
                 case VType.S16_2:
                 case VType.S16_4:
-                    // fixed point with 11 fractional bits, not a normalised short
+                case VType.S16_2N:
+                case VType.S16_4N:
+                case VType.U16_2N:
+                case VType.U16_4N:
+                    // fixed point with 11 fractional bits, not a normalised short — и для
+                    // «нормализованных» типов тоже (UV Чужого лежат в S16_2N: /32767 давал
+                    // развёртку в 1/16 текстуры, как и у OpenCAGE делим на 2048)
                     short u = ReadI16(data, at);
                     short v = ReadI16(data, at + 2);
                     result[i] = new Vector2(u / TexCoordFixedPoint, v / TexCoordFixedPoint);

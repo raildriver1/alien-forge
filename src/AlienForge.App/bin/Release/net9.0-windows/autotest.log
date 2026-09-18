@@ -1,0 +1,15 @@
+[14:56:03] install=c:\program files (x86)\steam\steamapps\common\Alien Isolation
+[14:56:03] level index=3
+[14:56:03] после загрузки: ENG_ALIEN_NEST: построение дерева
+[14:56:03] модель: ..\CHARACTERS\ALIEN\model0.cs2
+[14:56:04] после ShowModel: Готово
+[14:56:04] после поиска анимаций: Готово | клипов 169 | summary: Скелет: ALIEN (id 4020659628, 28544 B)    Клипов: 169
+[14:56:04]    ALIEN_COVERMAG_POSES  (ANIM_CLIP_DB_SEC_3557075584.BIN, имён 1)
+[14:56:04]    ANNOUNCE_TRALIER_ALIEN  (ANIM_CLIP_DB_SEC_1336769002.BIN, имён 1)
+[14:56:04]    AYZ_PRODUCTION (320 клипов)  (ANIM_CLIP_DB_SEC_905084297.BIN, имён 320)
+[14:56:04]    AYZ_SC12_SH200_ALIEN  (ANIM_CLIP_DB_SEC_3842438643.BIN, имён 1)
+[14:56:04]    AYZ_SC12_SH210_ALIEN  (ANIM_CLIP_DB_SEC_2183314582.BIN, имён 1)
+[14:56:04] клипов в списке: 488; выбран ANIMATION\AYZ_PRODUCTION\ALIEN\LOCOMOTION\WALK_MEDIUM\WALK_FORWARD
+[14:56:08] после экспорта одного: Записано анимаций: 1, костей: 127  C:/Users/lelil/AppData/Local/Temp/af/gui_walk.glb  12,39 МБ  проверка пройдена
+[14:56:11] после Play: ANIMATION\AYZ_PRODUCTION\ALIEN\LOCOMOTION\WALK_MEDIUM\WALK_FORWARD: 196 × кадр, 6,50 с, скелет 127
+[14:56:11] конец

@@ -95,7 +95,7 @@
     "CathodeLib/0.12.2": {
       "type": "package",
       "serviceable": true,
-      "sha512": "sha512-y/dGTjrhjXXk3I7fHpeFmQczhvY/mkroHnqTUz9kh5Jd3R5/npm8z6iA3k6tva13lVhHoyDJprC9ffMxxKf8/w==",
+      "sha512": "sha512-b0tuQ4J8Wgkyn2s8T3rLg8nRQke9EpBpdVqwKsxwEvMjL6eVJZ6U4YM5UpFLcqaFYl+PrB8oB6uyL6UW+P4eyQ==",
       "path": "cathodelib/0.12.2",
       "hashPath": "cathodelib.0.12.2.nupkg.sha512"
     },

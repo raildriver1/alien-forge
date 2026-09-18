@@ -184,19 +184,11 @@ public static class MeshPreview
         if (material is null)
             return null;
 
-        Textures.TEX4? pick = null;
-        foreach (var ptr in material.TextureReferences)
-        {
-            var tex = ptr?.Texture;
-            if (tex is null)
-                continue;
-            string name = tex.Name ?? string.Empty;
-            if (name.Contains("[d]", StringComparison.OrdinalIgnoreCase))
-            {
-                pick = tex;
-                break;
-            }
-        }
+        // Диффуз по привязке сэмплера шейдера (см. ShaderLayout), а не по букве в имени
+        var layout = AlienForge.Core.Export.ShaderLayout.Read(material);
+        var slot = layout.First(AlienForge.Core.Export.TextureRole.Diffuse)
+                   ?? layout.First(AlienForge.Core.Export.TextureRole.Colour);
+        Textures.TEX4? pick = slot?.Texture;
         if (pick is null)
             return null;
         if (cache.TryGetValue(pick, out var cached))
@@ -205,12 +197,25 @@ public static class MeshPreview
         ImageSource? image = null;
         var result = TextureDecoder.Decode(pick);
         if (result.Ok)
+        {
+            // У непрозрачных материалов альфа диффуза — служебный канал (маска
+            // подповерхностного рассеивания, блик...), а не прозрачность: WPF иначе
+            // рисует такие места дырами (чёрным фоном).
+            if (!layout.Transparent && !layout.Cutout)
+                ForceOpaque(result.Image!);
             image = ToBitmap(result.Image!);
+        }
         else
             notes.Add($"текстура '{pick.Name}': {result.Error}");
 
         cache[pick] = image;
         return image;
+    }
+
+    private static void ForceOpaque(RgbaImage image)
+    {
+        for (int i = 3; i < image.Pixels.Length; i += 4)
+            image.Pixels[i] = 255;
     }
 
     /// <summary>Wraps decoded RGBA pixels as a WPF bitmap.</summary>

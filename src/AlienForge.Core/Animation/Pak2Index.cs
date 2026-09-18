@@ -21,6 +21,7 @@ public sealed record Pak2Entry(int Index, string Name, long Offset, int Length)
 ///   +0x00  "PAK2"
 ///   +0x04  int32  size of the name table
 ///   +0x08  int32  number of records
+///   +0x0C  int32  alignment of every record's start (4)
 ///   +0x10         null-terminated names, one per record
 ///   then          int32 per record: the ABSOLUTE end offset of its data
 ///   then          record bodies, back to back
@@ -51,6 +52,12 @@ public sealed class Pak2Index
 
         int nameTableSize = reader.ReadInt32();
         int count = reader.ReadInt32();
+        // +0x0C — выравнивание начала каждой записи (в UI.PAK и ANIMATION.PAK — 4):
+        // ends[] хранит настоящий конец данных, а следующая запись начинается с
+        // ближайшей кратной границы. Без этого файлы читались со сдвигом 1–3 байта
+        // (JPEXS: "Invalid SWF file, wrong signature").
+        int alignment = reader.ReadInt32();
+        if (alignment <= 0 || alignment > 4096) alignment = 1;
         if (count < 0 || count > 5_000_000 || nameTableSize < 0)
             throw new InvalidDataException($"{path}: неправдоподобный заголовок PAK2.");
 
@@ -81,8 +88,9 @@ public sealed class Pak2Index
             if ((i + 1) * 4 > endBlob.Length)
                 break;
             long end = BinaryPrimitives.ReadUInt32LittleEndian(endBlob.AsSpan(i * 4, 4));
-            int length = (int)Math.Max(0, end - previous);
-            entries.Add(new Pak2Entry(i, names[i], previous, length));
+            long start = (previous + alignment - 1) / alignment * alignment;
+            int length = (int)Math.Max(0, end - start);
+            entries.Add(new Pak2Entry(i, names[i], start, length));
             previous = end;
         }
 

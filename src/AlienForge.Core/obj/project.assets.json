@@ -2,6 +2,22 @@
   "version": 3,
   "targets": {
     "net9.0-windows7.0": {
+      "BCnEncoder.Net/2.1.0": {
+        "type": "package",
+        "dependencies": {
+          "Microsoft.Toolkit.HighPerformance": "7.0.2"
+        },
+        "compile": {
+          "lib/netstandard2.1/BCnEncoder.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/netstandard2.1/BCnEncoder.dll": {
+            "related": ".xml"
+          }
+        }
+      },
       "CathodeLib/0.12.2": {
         "type": "package",
         "dependencies": {
@@ -62,6 +78,80 @@
           "lib/net6.0/K4os.Hash.xxHash.dll": {
             "related": ".xml"
           }
+        }
+      },
+      "Microsoft.Toolkit.HighPerformance/7.0.2": {
+        "type": "package",
+        "compile": {
+          "lib/net5.0/Microsoft.Toolkit.HighPerformance.dll": {
+            "related": ".pdb;.xml"
+          }
+        },
+        "runtime": {
+          "lib/net5.0/Microsoft.Toolkit.HighPerformance.dll": {
+            "related": ".pdb;.xml"
+          }
+        }
+      },
+      "SharpGLTF.Core/1.0.5": {
+        "type": "package",
+        "compile": {
+          "lib/net8.0/SharpGLTF.Core.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/SharpGLTF.Core.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "SharpGLTF.Runtime/1.0.5": {
+        "type": "package",
+        "dependencies": {
+          "SharpGLTF.Core": "1.0.5"
+        },
+        "compile": {
+          "lib/net8.0/SharpGLTF.Runtime.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/SharpGLTF.Runtime.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "SharpGLTF.Toolkit/1.0.5": {
+        "type": "package",
+        "dependencies": {
+          "SharpGLTF.Runtime": "1.0.5"
+        },
+        "compile": {
+          "lib/net8.0/SharpGLTF.Toolkit.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net8.0/SharpGLTF.Toolkit.dll": {
+            "related": ".xml"
+          }
+        }
+      },
+      "SixLabors.ImageSharp/3.1.6": {
+        "type": "package",
+        "compile": {
+          "lib/net6.0/SixLabors.ImageSharp.dll": {
+            "related": ".xml"
+          }
+        },
+        "runtime": {
+          "lib/net6.0/SixLabors.ImageSharp.dll": {
+            "related": ".xml"
+          }
+        },
+        "build": {
+          "build/SixLabors.ImageSharp.props": {}
         }
       },
       "System.Buffers/4.5.1": {
@@ -132,12 +222,26 @@
     }
   },
   "libraries": {
+    "BCnEncoder.Net/2.1.0": {
+      "sha512": "bBKYUDhpYenmp8vy5BVUHmS2LFym0NMga9V+S1eMJ+4zQLBwDw63Bs83AKOyqBKC2AqqgxXdTFA2a2V+SmGoIw==",
+      "type": "package",
+      "path": "bcnencoder.net/2.1.0",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "bcnencoder.net.2.1.0.nupkg.sha512",
+        "bcnencoder.net.nuspec",
+        "lib/netstandard2.1/BCnEncoder.dll",
+        "lib/netstandard2.1/BCnEncoder.xml"
+      ]
+    },
     "CathodeLib/0.12.2": {
-      "sha512": "y/dGTjrhjXXk3I7fHpeFmQczhvY/mkroHnqTUz9kh5Jd3R5/npm8z6iA3k6tva13lVhHoyDJprC9ffMxxKf8/w==",
+      "sha512": "b0tuQ4J8Wgkyn2s8T3rLg8nRQke9EpBpdVqwKsxwEvMjL6eVJZ6U4YM5UpFLcqaFYl+PrB8oB6uyL6UW+P4eyQ==",
       "type": "package",
       "path": "cathodelib/0.12.2",
       "files": [
         ".nupkg.metadata",
+        ".signature.p7s",
         "README.md",
         "cathodelib.0.12.2.nupkg.sha512",
         "cathodelib.nuspec",
@@ -206,6 +310,113 @@
         "lib/netstandard2.0/K4os.Hash.xxHash.xml",
         "lib/netstandard2.1/K4os.Hash.xxHash.dll",
         "lib/netstandard2.1/K4os.Hash.xxHash.xml"
+      ]
+    },
+    "Microsoft.Toolkit.HighPerformance/7.0.2": {
+      "sha512": "tG6v0AhDw/yJMtiH/tI4F6I/+sNIfu4++6WFfN73FyNcPh31et33w45wo8Lx1sfxcfLtkYk+w2fvU/MubYg4VQ==",
+      "type": "package",
+      "path": "microsoft.toolkit.highperformance/7.0.2",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "images/nuget.png",
+        "lib/net5.0/Microsoft.Toolkit.HighPerformance.dll",
+        "lib/net5.0/Microsoft.Toolkit.HighPerformance.pdb",
+        "lib/net5.0/Microsoft.Toolkit.HighPerformance.xml",
+        "lib/netcoreapp2.1/Microsoft.Toolkit.HighPerformance.dll",
+        "lib/netcoreapp2.1/Microsoft.Toolkit.HighPerformance.pdb",
+        "lib/netcoreapp2.1/Microsoft.Toolkit.HighPerformance.xml",
+        "lib/netcoreapp3.1/Microsoft.Toolkit.HighPerformance.dll",
+        "lib/netcoreapp3.1/Microsoft.Toolkit.HighPerformance.pdb",
+        "lib/netcoreapp3.1/Microsoft.Toolkit.HighPerformance.xml",
+        "lib/netstandard1.4/Microsoft.Toolkit.HighPerformance.dll",
+        "lib/netstandard1.4/Microsoft.Toolkit.HighPerformance.pdb",
+        "lib/netstandard1.4/Microsoft.Toolkit.HighPerformance.xml",
+        "lib/netstandard2.0/Microsoft.Toolkit.HighPerformance.dll",
+        "lib/netstandard2.0/Microsoft.Toolkit.HighPerformance.pdb",
+        "lib/netstandard2.0/Microsoft.Toolkit.HighPerformance.xml",
+        "lib/netstandard2.1/Microsoft.Toolkit.HighPerformance.dll",
+        "lib/netstandard2.1/Microsoft.Toolkit.HighPerformance.pdb",
+        "lib/netstandard2.1/Microsoft.Toolkit.HighPerformance.xml",
+        "license.md",
+        "microsoft.toolkit.highperformance.7.0.2.nupkg.sha512",
+        "microsoft.toolkit.highperformance.nuspec"
+      ]
+    },
+    "SharpGLTF.Core/1.0.5": {
+      "sha512": "HNHKPqaHXm7R1nlXZ764K5UI02IeDOQ5DQKLjwYUVNTsSW27jJpw+wLGQx6ZFoiFYqUlyZjmsu+WfEak2GmJAg==",
+      "type": "package",
+      "path": "sharpgltf.core/1.0.5",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "glTF2Sharp.png",
+        "lib/net6.0/SharpGLTF.Core.dll",
+        "lib/net6.0/SharpGLTF.Core.xml",
+        "lib/net8.0/SharpGLTF.Core.dll",
+        "lib/net8.0/SharpGLTF.Core.xml",
+        "lib/netstandard2.0/SharpGLTF.Core.dll",
+        "lib/netstandard2.0/SharpGLTF.Core.xml",
+        "lib/netstandard2.1/SharpGLTF.Core.dll",
+        "lib/netstandard2.1/SharpGLTF.Core.xml",
+        "sharpgltf.core.1.0.5.nupkg.sha512",
+        "sharpgltf.core.nuspec"
+      ]
+    },
+    "SharpGLTF.Runtime/1.0.5": {
+      "sha512": "EVP32k4LqERxSVICiupT8xQvhHSHJCiXajBjNpqdfdajtREHayuVhH0Jmk6uSjTLX8/IIH9XfT34sw3TwvCziw==",
+      "type": "package",
+      "path": "sharpgltf.runtime/1.0.5",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "glTF2Sharp.png",
+        "lib/net6.0/SharpGLTF.Runtime.dll",
+        "lib/net6.0/SharpGLTF.Runtime.xml",
+        "lib/net8.0/SharpGLTF.Runtime.dll",
+        "lib/net8.0/SharpGLTF.Runtime.xml",
+        "lib/netstandard2.0/SharpGLTF.Runtime.dll",
+        "lib/netstandard2.0/SharpGLTF.Runtime.xml",
+        "lib/netstandard2.1/SharpGLTF.Runtime.dll",
+        "lib/netstandard2.1/SharpGLTF.Runtime.xml",
+        "sharpgltf.runtime.1.0.5.nupkg.sha512",
+        "sharpgltf.runtime.nuspec"
+      ]
+    },
+    "SharpGLTF.Toolkit/1.0.5": {
+      "sha512": "piQKk7PH2pSWQSQmCSd8cYPaDtAy/ppAD+Mrh2RUhhHI8awl81HqqLyAauwQhJwea3LNaiJ6f4ehZuOGk89TlA==",
+      "type": "package",
+      "path": "sharpgltf.toolkit/1.0.5",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "glTF2Sharp.png",
+        "lib/net6.0/SharpGLTF.Toolkit.dll",
+        "lib/net6.0/SharpGLTF.Toolkit.xml",
+        "lib/net8.0/SharpGLTF.Toolkit.dll",
+        "lib/net8.0/SharpGLTF.Toolkit.xml",
+        "lib/netstandard2.0/SharpGLTF.Toolkit.dll",
+        "lib/netstandard2.0/SharpGLTF.Toolkit.xml",
+        "lib/netstandard2.1/SharpGLTF.Toolkit.dll",
+        "lib/netstandard2.1/SharpGLTF.Toolkit.xml",
+        "sharpgltf.toolkit.1.0.5.nupkg.sha512",
+        "sharpgltf.toolkit.nuspec"
+      ]
+    },
+    "SixLabors.ImageSharp/3.1.6": {
+      "sha512": "dHQ5jugF9v+5/LCVHCWVzaaIL6WOehqJy6eju/0VFYFPEj2WtqkGPoEV9EVQP83dHsdoqYaTuWpZdwAd37UwfA==",
+      "type": "package",
+      "path": "sixlabors.imagesharp/3.1.6",
+      "files": [
+        ".nupkg.metadata",
+        ".signature.p7s",
+        "LICENSE",
+        "build/SixLabors.ImageSharp.props",
+        "lib/net6.0/SixLabors.ImageSharp.dll",
+        "lib/net6.0/SixLabors.ImageSharp.xml",
+        "sixlabors.imagesharp.128.png",
+        "sixlabors.imagesharp.3.1.6.nupkg.sha512",
+        "sixlabors.imagesharp.nuspec"
       ]
     },
     "System.Buffers/4.5.1": {
@@ -381,36 +592,33 @@
   },
   "projectFileDependencyGroups": {
     "net9.0-windows7.0": [
-      "CathodeLib >= 0.12.2"
+      "BCnEncoder.Net >= 2.1.0",
+      "CathodeLib >= 0.12.2",
+      "SharpGLTF.Toolkit >= 1.0.5",
+      "SixLabors.ImageSharp >= 3.1.6"
     ]
   },
   "packageFolders": {
-    "C:\\Users\\8888\\.nuget\\packages\\": {},
-    "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages": {}
+    "C:\\Users\\lelil\\.nuget\\packages\\": {}
   },
   "project": {
     "version": "0.1.0",
     "restore": {
-      "projectUniqueName": "C:\\Users\\8888\\Desktop\\AlienForge\\src\\AlienForge.Core\\AlienForge.Core.csproj",
+      "projectUniqueName": "C:\\Users\\lelil\\Downloads\\alien-forge-main\\src\\AlienForge.Core\\AlienForge.Core.csproj",
       "projectName": "AlienForge.Core",
-      "projectPath": "C:\\Users\\8888\\Desktop\\AlienForge\\src\\AlienForge.Core\\AlienForge.Core.csproj",
-      "packagesPath": "C:\\Users\\8888\\.nuget\\packages\\",
-      "outputPath": "C:\\Users\\8888\\Desktop\\AlienForge\\src\\AlienForge.Core\\obj\\",
+      "projectPath": "C:\\Users\\lelil\\Downloads\\alien-forge-main\\src\\AlienForge.Core\\AlienForge.Core.csproj",
+      "packagesPath": "C:\\Users\\lelil\\.nuget\\packages\\",
+      "outputPath": "C:\\Users\\lelil\\Downloads\\alien-forge-main\\src\\AlienForge.Core\\obj\\",
       "projectStyle": "PackageReference",
-      "fallbackFolders": [
-        "C:\\Program Files (x86)\\Microsoft Visual Studio\\Shared\\NuGetPackages"
-      ],
       "configFilePaths": [
-        "C:\\Users\\8888\\Desktop\\AlienForge\\NuGet.Config",
-        "C:\\Users\\8888\\AppData\\Roaming\\NuGet\\NuGet.Config",
-        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.FallbackLocation.config",
-        "C:\\Program Files (x86)\\NuGet\\Config\\Microsoft.VisualStudio.Offline.config"
+        "C:\\Users\\lelil\\Downloads\\alien-forge-main\\NuGet.Config",
+        "C:\\Users\\lelil\\AppData\\Roaming\\NuGet\\NuGet.Config"
       ],
       "originalTargetFrameworks": [
         "net9.0-windows"
       ],
       "sources": {
-        "C:\\Users\\8888\\Desktop\\_cathodelib\\CathodeLib\\bin\\Release": {},
+        "C:\\Users\\lelil\\Downloads\\_cathodelib\\CathodeLib\\bin\\Release": {},
         "https://api.nuget.org/v3/index.json": {}
       },
       "frameworks": {
@@ -435,9 +643,21 @@
       "net9.0-windows7.0": {
         "targetAlias": "net9.0-windows",
         "dependencies": {
+          "BCnEncoder.Net": {
+            "target": "Package",
+            "version": "[2.1.0, )"
+          },
           "CathodeLib": {
             "target": "Package",
             "version": "[0.12.2, )"
+          },
+          "SharpGLTF.Toolkit": {
+            "target": "Package",
+            "version": "[1.0.5, )"
+          },
+          "SixLabors.ImageSharp": {
+            "target": "Package",
+            "version": "[3.1.6, )"
           }
         },
         "imports": [
@@ -459,11 +679,31 @@
             "privateAssets": "none"
           }
         },
-        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.304/PortableRuntimeIdentifierGraph.json"
+        "runtimeIdentifierGraphPath": "C:\\Program Files\\dotnet\\sdk\\9.0.318/PortableRuntimeIdentifierGraph.json"
       }
     }
   },
   "logs": [
+    {
+      "code": "NU1903",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "У пакета \"SixLabors.ImageSharp\" 3.1.6 есть известная уязвимость https://github.com/advisories/GHSA-2cmq-823j-5qj8 (уровень серьезности: высокий)",
+      "libraryId": "SixLabors.ImageSharp",
+      "targetGraphs": [
+        "net9.0-windows7.0"
+      ]
+    },
+    {
+      "code": "NU1902",
+      "level": "Warning",
+      "warningLevel": 1,
+      "message": "У пакета \"SixLabors.ImageSharp\" 3.1.6 есть известная уязвимость https://github.com/advisories/GHSA-rxmq-m78w-7wmc (уровень серьезности: средний)",
+      "libraryId": "SixLabors.ImageSharp",
+      "targetGraphs": [
+        "net9.0-windows7.0"
+      ]
+    },
     {
       "code": "NU1701",
       "level": "Warning",

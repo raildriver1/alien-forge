@@ -25,6 +25,8 @@ internal static class Program
                 "inspect" => CmdInspect(Arg(args, 1), Arg(args, 2), Arg(args, 3)),
                 "textures" => CmdTextures(Arg(args, 1), Arg(args, 2), Arg(args, 3), Arg(args, 4),
                     Arg(args, 5)),
+                "texfind" => CmdTexFind(Arg(args, 1), Arg(args, 2), Arg(args, 3)),
+                "texraw" => CmdTexRaw(Arg(args, 1), Arg(args, 2), Arg(args, 3)),
                 "wictest" => CmdWicTest(Arg(args, 1), Arg(args, 2), Arg(args, 3)),
                 "tree" => CmdTree(Arg(args, 1), Arg(args, 2), Arg(args, 3), Arg(args, 4)),
                 "deps" => CmdDeps(Arg(args, 1), Arg(args, 2), Arg(args, 3)),
@@ -39,6 +41,21 @@ internal static class Program
                 "names" => CmdNames(Arg(args, 1), Arg(args, 2)),
                 "clips" => CmdClips(Arg(args, 1), Arg(args, 2), Arg(args, 3)),
                 "animscan" => CmdAnimScan(Arg(args, 1), Arg(args, 2)),
+                "guitest" => CmdGuiTest(Arg(args, 1), Arg(args, 2), Arg(args, 3), Arg(args, 4)),
+                "rig" => CmdRig(Arg(args, 1), Arg(args, 2)),
+                "rigs" => CmdRigs(Arg(args, 1)),
+                "cliprows" => CmdClipRows(Arg(args, 1)),
+                "texstats" => CmdTexStats(Arg(args, 1)),
+                "shaderdump" => CmdShaderDump(Arg(args, 1), Arg(args, 2)),
+                "material" => CmdMaterial(Arg(args, 1), Arg(args, 2), Arg(args, 3)),
+                "level" => CmdLevel(args),
+                "leveldiag" => CmdLevelDiag(Arg(args, 1)),
+                "funcs" => CmdFuncs(Arg(args, 1), Arg(args, 2)),
+                "enum" => CmdEnum(Arg(args, 1)),
+                "paramstats" => CmdParamStats(Arg(args, 1), Arg(args, 2)),
+                "comp" => CmdComp(Arg(args, 1), Arg(args, 2), args.Contains("--links")),
+                "matfind" => CmdMatFind(Arg(args, 1), Arg(args, 2)),
+                "ui" => CmdUi(args),
                 _ => CmdHelp(),
             };
         }
@@ -72,6 +89,13 @@ internal static class Program
         Console.WriteLine("                                      [клипов]: 0 — только скелет и скин,");
         Console.WriteLine("                                      N — запечь ещё и N клипов");
         Console.WriteLine("                                      экспорт модели с текстурами в .glb");
+        Console.WriteLine("  level <уровень> <файл.glb> [корень] [--no-textures] [--unlit] [--gray] [--no-decals]");
+        Console.WriteLine("                                      экспорт всего уровня в glTF как в игре");
+        Console.WriteLine("                                      (иерархия композитов, без окклюдеров/LOD)");
+        Console.WriteLine("  ui list [фильтр] | ui extract <папка> [фильтр]");
+        Console.WriteLine("  ui open <ролик.GFX> | ui sprites <ролик.GFX> <папка> [items]");
+        Console.WriteLine("                                      интерфейс игры (UI.PAK): открыть ролик в JPEXS,");
+        Console.WriteLine("                                      выгрузить спрайты PNG-последовательностями");
         Console.WriteLine("  extract <уровень> <папка> [фильтр] [корень]");
         Console.WriteLine("                                      пакетный экспорт моделей уровня");
         Console.WriteLine();
@@ -293,6 +317,57 @@ internal static class Program
     }
 
     // -------------------------------------------------------------- textures
+    /// <summary>texfind: текстуры уровня/глобальные по фрагменту имени → PNG (гобо, кукисы фонарика…).</summary>
+    private static int CmdTexFind(string? levelName, string? filter, string? outDir)
+    {
+        if (levelName is null || filter is null) { Console.Error.WriteLine("Нужны уровень и фрагмент имени [папка вывода]."); return 2; }
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var level = ResolveLevel(install, levelName);
+        if (level is null) return 2;
+        var ws = AssetWorkspace.OpenLevel(install, level);
+        int n = 0;
+        foreach (var tex in ws.LevelTextures.Entries.Concat(ws.GlobalTextures.Entries))
+        {
+            string name = tex.Name ?? "";
+            if (!name.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            var result = TextureDecoder.Decode(tex);
+            Console.WriteLine($"  {name}  {(result.Ok ? $"{result.Format} {result.Image!.Width}x{result.Image.Height}" : "ПРОВАЛ " + result.Error)}");
+            if (result.Ok && outDir is not null)
+            {
+                Directory.CreateDirectory(outDir);
+                PngEncoder.Save(result.Image!, Path.Combine(outDir, Path.GetFileNameWithoutExtension(name) + ".png"));
+            }
+            n++;
+        }
+        Console.WriteLine($"найдено: {n}");
+        return 0;
+    }
+
+    /// <summary>texraw: сырые байты текстур (объёмные LUT и т.п.) — имя, формат, размеры, длины в консоль, содержимое в файлы.</summary>
+    private static int CmdTexRaw(string? levelName, string? filter, string? outDir)
+    {
+        if (levelName is null || filter is null || outDir is null) return 2;
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var level = ResolveLevel(install, levelName);
+        if (level is null) return 2;
+        var ws = AssetWorkspace.OpenLevel(install, level);
+        Directory.CreateDirectory(outDir);
+        foreach (var tex in ws.LevelTextures.Entries.Concat(ws.GlobalTextures.Entries))
+        {
+            string name = tex.Name ?? "";
+            if (!name.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            foreach (var (tag, part) in new[] { ("persistent", tex.TexturePersistent), ("streamed", tex.TextureStreamed) })
+            {
+                if (part?.Content is null || part.Content.Length == 0) continue;
+                Console.WriteLine($"  {name} [{tag}] {tex.Format} {part.Width}x{part.Height} bytes={part.Content.Length}");
+                File.WriteAllBytes(Path.Combine(outDir, Path.GetFileNameWithoutExtension(name) + "." + tag + ".bin"), part.Content);
+            }
+        }
+        return 0;
+    }
+
     private static int CmdTextures(string? levelName, string? modelPath, string? outDir,
         string? refDir, string? root)
     {
@@ -511,7 +586,7 @@ internal static class Program
         AnimationBundle? bundle = null;
         if (animSpec is not null)
         {
-            bundle = LoadBundleForExport(loaded, model.Name, animSpec);
+            bundle = LoadBundleForExport(loaded, model.Name, animSpec, model);
             if (bundle is null)
                 return 5;
         }
@@ -538,7 +613,7 @@ internal static class Program
     /// with no animation, which is the fast way to check the rig itself.
     /// </summary>
     private static AnimationBundle? LoadBundleForExport(AssetWorkspace ws, string? modelName,
-        string spec)
+        string spec, CATHODE.Models.CS2? model = null)
     {
         if (!int.TryParse(spec, out int wanted) || wanted < 0)
         {
@@ -556,7 +631,12 @@ internal static class Program
         Console.WriteLine($"  распаковщик: {dumper.ToolPath}");
 
         var catalog = AnimationCatalog.Open(ws.Install);
-        byte[]? skeletonHkx = catalog.ExtractSkeletonHavok(modelName);
+        // риг подбирается как в GUI: по пути, по имени (RIPLEY_FP → FEMALEFP…) и по числу костей
+        var guess = catalog.GuessSkeleton(modelName, model, dumper);
+        var (autoId, _, autoEntry) = catalog.ResolveSkeleton(modelName);
+        uint? force = guess.entry is not null && (autoEntry is null || guess.id != autoId) ? guess.id : null;
+        if (force is not null) Console.WriteLine($"  риг: {guess.name} ({guess.bones} костей)");
+        byte[]? skeletonHkx = catalog.ExtractSkeletonHavok(modelName, force);
         if (skeletonHkx is null)
         {
             Console.Error.WriteLine(
@@ -575,7 +655,7 @@ internal static class Program
             };
         }
 
-        var refs = catalog.ClipsFor(modelName);
+        var refs = catalog.ClipsFor(modelName, force);
         Console.WriteLine($"  контейнеров клипов: {refs.Count}, беру {Math.Min(wanted, refs.Count)}");
 
         SkeletonData? skeleton = null;
@@ -591,6 +671,7 @@ internal static class Program
                 skeleton ??= loadedBundle.Skeleton;
                 if (loadedBundle.Fps > 0f)
                     fps = loadedBundle.Fps;
+                AnimationCatalog.ApplyNames(clipRef, loadedBundle); // настоящие имена из ANIM_STRING_DB
                 clips.AddRange(loadedBundle.Clips);
                 Console.WriteLine($"    {clipRef.ShortName}: клипов {loadedBundle.Clips.Count}");
             }
@@ -1674,6 +1755,509 @@ internal static class Program
            + MathF.Abs(a.M44 - b.M44);
 
     /// <summary>Resolves the install and level, loads the archives, prints the log.</summary>
+    /// <summary>
+    /// Прогон ровно того пути, что идёт из окна (OnLoadAnimations + ExportWithAnimations),
+    /// но с выводом каждой ошибки, которые окно глотает (failed++).
+    /// </summary>
+    private static int CmdGuiTest(string? levelName, string? modelPath, string? outPath, string? maxSpec)
+    {
+        if (levelName is null || modelPath is null || outPath is null) return 2;
+        var ws = LoadLevel(levelName, null);
+        if (ws is null) return 2;
+        var model = ws.FindModelByPath(modelPath) ?? ws.FindModels(modelPath).FirstOrDefault();
+        if (model is null) { Console.Error.WriteLine("модель не найдена"); return 3; }
+        string modelName = model.Name ?? string.Empty;
+        var catalog = AnimationCatalog.Open(ws.Install);
+        var clips = catalog.ClipsFor(modelName);
+        Console.WriteLine($"ClipsFor('{modelName}'): {clips.Count} секций; без имён: {clips.Count(c => c.Names.Count == 0)}");
+        foreach (var c in clips.Take(12)) Console.WriteLine($"   {c.DisplayName,-60} names={c.Names.Count} file={c.ShortName}");
+        int max = int.TryParse(maxSpec, out int m) ? m : clips.Count;
+        var dumper = HavokDump.TryCreate();
+        if (dumper is null) { Console.Error.WriteLine("нет hkdump"); return 4; }
+        byte[]? skeletonHkx = catalog.ExtractSkeletonHavok(modelName, null);
+        if (skeletonHkx is null) { Console.Error.WriteLine("нет скелета: " + catalog.DescribeSkeleton(modelName)); return 5; }
+        SkeletonData? skeleton = null; var all = new List<ClipData>(); float fps = 30f; int failed = 0;
+        var errors = new Dictionary<string, int>();
+        foreach (var section in clips.Take(max))
+        {
+            try
+            {
+                var bundle = dumper.Load(catalog.ExtractHavok(section), skeletonHkx);
+                AnimationCatalog.ApplyNames(section, bundle);
+                skeleton ??= bundle.Skeleton;
+                if (bundle.Fps > 0f) fps = bundle.Fps;
+                all.AddRange(bundle.Clips);
+            }
+            catch (Exception ex)
+            {
+                failed++;
+                string k = $"{ex.GetType().Name}: {ex.Message}";
+                errors[k] = errors.GetValueOrDefault(k) + 1;
+                if (errors[k] <= 2) Console.WriteLine($"   ! {section.ShortName}: {k}");
+            }
+        }
+        Console.WriteLine($"секций обработано {Math.Min(max, clips.Count)}, ошибок {failed}, клипов {all.Count}");
+        foreach (var kv in errors) Console.WriteLine($"   x{kv.Value}  {kv.Key}");
+        skeleton ??= dumper.LoadSkeletonOnly(skeletonHkx);
+        var animation = new AnimationBundle { Skeleton = skeleton, Clips = all, Fps = fps };
+        try
+        {
+            var export = ModelExporter.ExportGlb(ws, model, outPath, null, animation);
+            Console.WriteLine($"экспорт: клипов {export.Clips}, костей {export.Bones}, {export.Bytes / 1048576.0:F1} МБ; предупреждений {export.Warnings.Count}");
+            foreach (var w in export.Warnings.Take(12)) Console.WriteLine($"   ! {w}");
+            foreach (var c in all.Take(6)) Console.WriteLine($"   клип '{c.Name}' кадров {c.Frames} длит {c.Duration:F2}");
+            if (all.Count > 0)
+            {
+                var c0 = all[0];
+                int t1 = 0, tN = 0, r1 = 0, rN = 0, r1id = 0, t0 = 0;
+                foreach (var tr in c0.Tracks)
+                {
+                    if (tr.Translation.Length == 1) t1++; else if (tr.Translation.Length > 1) tN++; else t0++;
+                    if (tr.Rotation.Length == 1) { r1++; var q = tr.Rotation[0]; if (Math.Abs(q.W) > 0.9999f) r1id++; } else if (tr.Rotation.Length > 1) rN++;
+                }
+                Console.WriteLine($"   треков {c0.Tracks.Count}: transl 1key={t1} Nkey={tN} none={t0}; rot 1key={r1} (из них identity {r1id}) Nkey={rN}");
+                int diffRot = 0, diffTr = 0;
+                foreach (var tr in c0.Tracks)
+                {
+                    if (tr.Bone < 0 || tr.Bone >= skeleton!.Count) continue;
+                    var b = skeleton.Bones[tr.Bone];
+                    if (tr.Rotation.Length == 1) { var q = tr.Rotation[0]; var d = Math.Abs(q.X-b.Rotation.X)+Math.Abs(q.Y-b.Rotation.Y)+Math.Abs(q.Z-b.Rotation.Z)+Math.Abs(q.W-b.Rotation.W); var d2 = Math.Abs(q.X+b.Rotation.X)+Math.Abs(q.Y+b.Rotation.Y)+Math.Abs(q.Z+b.Rotation.Z)+Math.Abs(q.W+b.Rotation.W); if (Math.Min(d, d2) > 1e-3) diffRot++; }
+                    if (tr.Translation.Length == 1 && (tr.Translation[0] - b.Translation).Length() > 1e-3f) diffTr++;
+                }
+                Console.WriteLine($"   одноключевых, отличающихся от bind: rot {diffRot}, transl {diffTr}");
+                var sample = c0.Tracks.Where(tr => tr.Rotation.Length == 1).Take(4).ToList();
+                foreach (var tr in sample) Console.WriteLine($"     bone {tr.Bone} rot1={tr.Rotation[0]} transl={(tr.Translation.Length > 0 ? tr.Translation[0].ToString() : "-")}");
+            }
+            var report = GlbValidator.Validate(outPath);
+            Console.WriteLine($"проверка: {report}");
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"ЭКСПОРТ УПАЛ: {ex.GetType().Name}: {ex.Message}");
+            Console.WriteLine(ex.StackTrace);
+            return 6;
+        }
+        return 0;
+    }
+
+    // UI.PAK: Scaleform-ролики интерфейса и JPEXS
+    private static int CmdUi(string[] args)
+    {
+        string? sub = Arg(args, 1);
+        var install = Resolve(null);
+        if (install is null) return 2;
+        AlienForge.Core.Ui.UiArchive ui;
+        try { ui = AlienForge.Core.Ui.UiArchive.Open(install); }
+        catch (Exception ex) { Console.Error.WriteLine(ex.Message); return 2; }
+
+        switch (sub)
+        {
+            case "list":
+            {
+                foreach (var e in ui.Find(Arg(args, 2)))
+                    Console.WriteLine($"{e.Name,-60} {e.Length,10} B");
+                Console.WriteLine($"JPEXS: {AlienForge.Core.Ui.Jpexs.FindGui() ?? "не найден"}");
+                return 0;
+            }
+            case "extract":
+            {
+                string? outDir = Arg(args, 2);
+                if (outDir is null) { Console.Error.WriteLine("ui extract <папка> [фильтр]"); return 2; }
+                int n = 0;
+                foreach (var e in ui.Find(Arg(args, 3)))
+                {
+                    ui.Extract(e, outDir, keepFolders: true);
+                    n++;
+                }
+                Console.WriteLine($"извлечено {n} -> {outDir}");
+                return 0;
+            }
+            case "open":
+            {
+                var e = Arg(args, 2) is string name ? ui.Resolve(name) : null;
+                if (e is null) { Console.Error.WriteLine("ui open <имя .GFX>"); return 2; }
+                string path = ui.EnsureCached(e);
+                var proc = AlienForge.Core.Ui.Jpexs.Open(path);
+                Console.WriteLine(proc is null ? "JPEXS (ffdec.exe) не найден: поставьте в Program Files/FFDec или задайте FFDEC_HOME" : $"открыт в JPEXS: {path}");
+                return proc is null ? 1 : 0;
+            }
+            case "sprites":
+            {
+                var e = Arg(args, 2) is string name ? ui.Resolve(name) : null;
+                string? outDir = Arg(args, 3);
+                if (e is null || outDir is null) { Console.Error.WriteLine("ui sprites <имя .GFX> <папка> [items]"); return 2; }
+                string path = ui.EnsureCached(e);
+                var (code, output) = AlienForge.Core.Ui.Jpexs.ExportItems(path, outDir, Arg(args, 4), line => Console.WriteLine("  " + line));
+                if (code != 0) Console.Error.WriteLine(output);
+                else Console.WriteLine($"готово -> {outDir}");
+                return code == 0 ? 0 : 1;
+            }
+            default:
+                Console.Error.WriteLine("ui list [фильтр] | ui extract <папка> [фильтр] | ui open <ролик> | ui sprites <ролик> <папка> [sprite,frame,image,shape,script,all]");
+                return 2;
+        }
+    }
+
+    private static int CmdMatFind(string? levelName, string? filter)
+    {
+        if (levelName is null || filter is null) return 2;
+        var ws = LoadLevel(levelName, null);
+        if (ws is null) return 2;
+        int n = 0;
+        foreach (var mat in ws.Materials.Entries)
+        {
+            if (!(mat.Name ?? "").Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            if (n++ >= 3) break;
+            Console.WriteLine("=== " + mat.Name);
+            Console.WriteLine(AlienForge.Core.Export.ShaderLayout.Read(mat).Describe());
+        }
+        return 0;
+    }
+
+    // Перепись функций COMMANDS уровня: тип функции -> число сущностей (+ параметры примера)
+    private static int CmdFuncs(string? levelName, string? filter)
+    {
+        if (levelName is null) return 2;
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var level = ResolveLevel(install, levelName);
+        if (level is null) return 2;
+        var lvl = AlienForge.Core.Export.LevelExporter.OpenLevel(install.Root, level.Directory);
+        var counts = new Dictionary<string, int>();
+        var example = new Dictionary<string, CATHODE.Scripting.FunctionEntity>();
+        foreach (var comp in lvl.Commands.Entries)
+            foreach (var fe in comp.functions)
+            {
+                string fn = fe.function.IsFunctionType ? fe.function.AsFunctionType.ToString() : ("(" + (lvl.Commands.GetComposite(fe.function)?.name ?? fe.function.ToString()) + ")");
+                if (filter is not null && !fn.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+                counts[fn] = counts.GetValueOrDefault(fn) + 1;
+                if (!example.ContainsKey(fn) || example[fn].parameters.Count < fe.parameters.Count) example[fn] = fe;
+            }
+        foreach (var kv in counts.OrderByDescending(k => k.Value).Take(filter is null ? 60 : 200))
+        {
+            var fe = example[kv.Key];
+            var ps = string.Join(", ", fe.parameters.Take(filter is null ? 14 : 200).Select(p => $"{p.name}={Short(p.content)}"));
+            Console.WriteLine($"{kv.Value,6}  {kv.Key}   [{ps}]");
+        }
+        return 0;
+    }
+
+    // Частоты параметров (имя=значение) у сущностей заданного типа функции
+    private static int CmdParamStats(string? levelName, string? type)
+    {
+        if (levelName is null || type is null) return 2;
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var level = ResolveLevel(install, levelName);
+        if (level is null) return 2;
+        var lvl = AlienForge.Core.Export.LevelExporter.OpenLevel(install.Root, level.Directory);
+        var counts = new Dictionary<string, int>();
+        int total = 0;
+        foreach (var comp in lvl.Commands.Entries)
+            foreach (var fe in comp.functions)
+            {
+                string fn = fe.function.IsFunctionType ? fe.function.AsFunctionType.ToString() : (lvl.Commands.GetComposite(fe.function)?.name ?? "");
+                if (!fn.Equals(type, StringComparison.OrdinalIgnoreCase)) continue;
+                total++;
+                foreach (var p in fe.parameters)
+                {
+                    string k = $"{p.name}={Short(p.content)}";
+                    counts[k] = counts.GetValueOrDefault(k) + 1;
+                }
+                foreach (var l in fe.childLinks)
+                {
+                    string k = $"{l.thisParamID} -> link";
+                    counts[k] = counts.GetValueOrDefault(k) + 1;
+                }
+            }
+        Console.WriteLine($"{type}: {total} сущностей");
+        foreach (var kv in counts.OrderByDescending(k => k.Value).Take(60)) Console.WriteLine($"{kv.Value,6}  {kv.Key}");
+        return 0;
+    }
+
+    private static int CmdEnum(string? filter)
+    {
+        foreach (var e in CathodeLib.CustomTable.Vanilla.CathodeEnums.enums)
+        {
+            if (filter is not null && !e.Name.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            Console.WriteLine(e.Name + ": " + string.Join(", ", e.Entries.Select(x => $"{x.Index}={x.Name}")));
+        }
+        return 0;
+    }
+
+    // Дамп композитов по фильтру имени: сущности, параметры, связи (для разбора видимости)
+    private static int CmdComp(string? levelName, string? filter, bool links)
+    {
+        if (levelName is null || filter is null) return 2;
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var level = ResolveLevel(install, levelName);
+        if (level is null) return 2;
+        var lvl = AlienForge.Core.Export.LevelExporter.OpenLevel(install.Root, level.Directory);
+        var cmds = lvl.Commands;
+        int shown = 0;
+        foreach (var comp in cmds.Entries)
+        {
+            if (!(comp.name ?? "").Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            if (shown++ >= 8) break;
+            Console.WriteLine($"=== {comp.name}  (функций {comp.functions.Count}, переменных {comp.variables.Count}, алиасов {comp.aliases.Count}, прокси {comp.proxies.Count})");
+            foreach (var parent in cmds.Entries)
+                foreach (var pf in parent.functions)
+                    if (!pf.function.IsFunctionType && pf.function == comp.shortGUID)
+                        Console.WriteLine($"  << {parent.name} :: {cmds.Utils.GetEntityName(parent, pf)}  [{string.Join(", ", pf.parameters.Select(p => $"{p.name}={Short(p.content)}"))}]");
+            foreach (var v in comp.variables)
+                Console.WriteLine($"  VAR {cmds.Utils.GetEntityName(comp, v)} : {v.type}  [{string.Join(", ", v.parameters.Select(p => $"{p.name}={Short(p.content)}"))}]");
+            foreach (var fe in comp.functions)
+            {
+                string fn = fe.function.IsFunctionType ? fe.function.AsFunctionType.ToString() : ("(" + (cmds.GetComposite(fe.function)?.name ?? fe.function.ToString()) + ")");
+                var ps = string.Join(", ", fe.parameters.Select(p => $"{p.name}={Short(p.content)}"));
+                Console.WriteLine($"  {cmds.Utils.GetEntityName(comp, fe)} : {fn}  [{ps}]");
+                if (links)
+                    foreach (var l in fe.childLinks)
+                    {
+                        var target = comp.GetEntityByID(l.linkedEntityID);
+                        string tn = target is null ? l.linkedEntityID.ToString() : cmds.Utils.GetEntityName(comp, target);
+                        Console.WriteLine($"      {l.thisParamID.ToString()} -> {tn}.{l.linkedParamID.ToString()}");
+                    }
+            }
+        }
+        return 0;
+    }
+
+    private static string Short(CATHODE.Scripting.Internal.ParameterData? d)
+    {
+        if (d is null) return "?";
+        string t = d.ToString() ?? d.GetType().Name;
+        return t.Length > 40 ? t[..40] : t;
+    }
+
+    private static int CmdLevelDiag(string? levelName)
+    {
+        if (levelName is null) return 2;
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var level = ResolveLevel(install, levelName);
+        if (level is null) return 2;
+        var lvl = AlienForge.Core.Export.LevelExporter.OpenLevel(install.Root, level.Directory);
+        AlienForge.Core.Export.LevelExporter.DiagnoseMaterials(lvl);
+        return 0;
+    }
+
+    // Экспорт целого уровня в glTF как в просмотрщике OpenCAGE (см. LevelExporter)
+    private static int CmdLevel(string[] args)
+    {
+        var positional = args.Skip(1).Where(a => !a.StartsWith("-")).ToList();
+        var flags = args.Skip(1).Where(a => a.StartsWith("-")).Select(a => a.ToLowerInvariant()).ToHashSet();
+        if (positional.Count < 2)
+        {
+            Console.Error.WriteLine("level <уровень> <out.glb|out.gltf> [корень] [--no-textures] [--unlit] [--gray] [--no-decals] [--diffuse-only] [--no-collision] [--collision-min=0.3] [--no-occluders] [--no-lights] [--no-particles] [--no-fog] [--no-rigid] [--no-zones] [--no-merge] [-v]");
+            return 2;
+        }
+        var install = Resolve(positional.Count > 2 ? positional[2] : null);
+        if (install is null) return 2;
+        var level = ResolveLevel(install, positional[0]);
+        if (level is null) return 2;
+        var opt = new AlienForge.Core.Export.LevelExporter.Options
+        {
+            Textures = !flags.Contains("--no-textures"),
+            Unlit = flags.Contains("--unlit"),
+            Gltf = flags.Contains("--gltf") || positional[1].EndsWith(".gltf", StringComparison.OrdinalIgnoreCase),
+            Verbose = flags.Contains("-v") || flags.Contains("--verbose"),
+            IncludeUnsupported = flags.Contains("--gray"),
+            Decals = !flags.Contains("--no-decals"),
+            AllMaps = !flags.Contains("--diffuse-only"),
+            GodotCollision = !flags.Contains("--no-collision"),
+            CollisionMinSize = args.Skip(1).Where(a => a.StartsWith("--collision-min=")).Select(a => float.TryParse(a[16..], System.Globalization.NumberStyles.Float, System.Globalization.CultureInfo.InvariantCulture, out float v) ? v : 0.3f).DefaultIfEmpty(0.3f).First(),
+            Occluders = !flags.Contains("--no-occluders"),
+            Lights = !flags.Contains("--no-lights"),
+            Particles = !flags.Contains("--no-particles"),
+            Fog = !flags.Contains("--no-fog"),
+            RigidBodies = !flags.Contains("--no-rigid"),
+            Zones = !flags.Contains("--no-zones"),
+            MergeStatic = !flags.Contains("--no-merge"),
+        };
+        try
+        {
+            var lvl = AlienForge.Core.Export.LevelExporter.OpenLevel(install.Root, level.Directory);
+            return AlienForge.Core.Export.LevelExporter.Run(lvl, level.Name, positional[1], opt);
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine("ошибка: " + ex.Message);
+            return 1;
+        }
+    }
+
+    // Материалы одной модели: полный разбор (слоты, каналы, фичи, параметры) + байткод её шейдеров
+    private static int CmdMaterial(string? levelName, string? modelPath, string? outDir)
+    {
+        if (levelName is null || modelPath is null) return 2;
+        var ws = LoadLevel(levelName, null);
+        if (ws is null) return 2;
+        var model = ws.FindModelByPath(modelPath) ?? ws.FindModels(modelPath).FirstOrDefault();
+        if (model is null) { Console.Error.WriteLine("модель не найдена"); return 2; }
+        if (outDir is not null) Directory.CreateDirectory(outDir);
+        var seen = new HashSet<CATHODE.Materials.Material>();
+        int ci = 0;
+        foreach (var component in model.Components)
+        {
+            int li = 0;
+            foreach (var lod in component.LODs)
+            {
+                int si = 0;
+                foreach (var sm in lod.Submeshes)
+                {
+                    var mat = sm.Material;
+                    string part = $"{lod.Name ?? "lod"} c{ci}l{li}s{si}";
+                    si++;
+                    if (mat is null || !seen.Add(mat)) continue;
+                    var layout = AlienForge.Core.Export.ShaderLayout.Read(mat);
+                    Console.WriteLine($"=== {part}: {mat.Name}");
+                    Console.WriteLine(layout.Describe());
+                    if (outDir is not null && mat.Shader?.PixelShader is { Length: > 0 })
+                    {
+                        string safe = string.Concat((mat.Name ?? "mat").Select(c => char.IsLetterOrDigit(c) ? c : '_'));
+                        File.WriteAllBytes(Path.Combine(outDir, $"{part.Replace(' ', '_')}_{safe}.ps.dxbc"), mat.Shader.PixelShader);
+                    }
+                }
+                li++;
+            }
+            ci++;
+        }
+        return 0;
+    }
+
+    // Байткод шейдеров уровня по убершейдерам: <папка>\<UBERSHADER>_<n>.ps.dxbc (+ vs)
+    private static int CmdShaderDump(string? levelName, string? outDir)
+    {
+        if (levelName is null || outDir is null) return 2;
+        var ws = LoadLevel(levelName, null);
+        if (ws is null) return 2;
+        Directory.CreateDirectory(outDir);
+        var seen = new Dictionary<CATHODE.Shaders.Shader, string>();
+        var perUber = new Dictionary<string, int>();
+        var index = new List<string>();
+        foreach (var mat in ws.Materials.Entries)
+        {
+            var sh = mat.Shader;
+            if (sh is null || sh.PixelShader is null || sh.PixelShader.Length == 0) continue;
+            if (seen.TryGetValue(sh, out var name)) { index.Add($"{name}	{mat.Name}"); continue; }
+            string uber = sh.Ubershader.ToString();
+            perUber.TryGetValue(uber, out int n);
+            perUber[uber] = n + 1;
+            name = $"{uber}_{n}";
+            seen[sh] = name;
+            File.WriteAllBytes(Path.Combine(outDir, name + ".ps.dxbc"), sh.PixelShader);
+            if (sh.VertexShader is { Length: > 0 }) File.WriteAllBytes(Path.Combine(outDir, name + ".vs.dxbc"), sh.VertexShader);
+            var samplers = CATHODE.ShaderTypes.ShaderUtility.GetSamplers(sh.Ubershader);
+            var features = CATHODE.ShaderTypes.ShaderUtility.GetFeatures(sh.Ubershader);
+            var sb = new System.Text.StringBuilder();
+            sb.AppendLine($"ubershader {uber}  features 0x{sh.UbershaderFeatureFlags:X}  req 0x{sh.UbershaderRequirementFlags:X}");
+            foreach (var f in features)
+            {
+                int? bit = CATHODE.ShaderTypes.ShaderUtility.GetShaderFunctionalityIndex(sh.Ubershader, CATHODE.ShaderTypes.ShaderIndexType.FEATURES, f);
+                if (bit is not null && (sh.UbershaderFeatureFlags & (1L << bit.Value)) != 0) sb.AppendLine($"  feature {f}");
+            }
+            for (int i = 0; i < sh.SamplerRemaps.Count; i++)
+                if (sh.SamplerRemaps[i] != 255)
+                    sb.AppendLine($"  sampler {i} {(i < samplers.Count ? samplers[i] : "?")} -> texture slot {sh.SamplerRemaps[i]}  stage {(i < sh.SamplerStageBindings.Count ? sh.SamplerStageBindings[i] : -1)}");
+            var pars = CATHODE.ShaderTypes.ShaderUtility.GetParameters(sh.Ubershader);
+            for (int i = 0; i < sh.PixelShaderParameterRemaps.Count; i++)
+                if (sh.PixelShaderParameterRemaps[i] != 255)
+                    sb.AppendLine($"  ps param {i} {(i < pars.Count ? pars[i] : "?")} -> const {sh.PixelShaderParameterRemaps[i]}");
+            sb.AppendLine($"  material example: {mat.Name}");
+            File.WriteAllText(Path.Combine(outDir, name + ".txt"), sb.ToString());
+            index.Add($"{name}	{mat.Name}");
+        }
+        File.WriteAllLines(Path.Combine(outDir, "index.txt"), index);
+        Console.WriteLine($"уникальных шейдеров: {seen.Count}");
+        foreach (var kv in perUber.OrderByDescending(k => k.Value)) Console.WriteLine($"  {kv.Key}: {kv.Value}");
+        return 0;
+    }
+
+    private static int CmdTexStats(string? levelName)
+    {
+        if (levelName is null) return 2;
+        var ws = LoadLevel(levelName, null);
+        if (ws is null) return 2;
+        int total = 0, noTex = 0, noDiffuse = 0, unknownSlots = 0, shown = 0;
+        var byShader = new Dictionary<int, (int mats, int noDiff)>();
+        foreach (var mat in ws.Materials.Entries)
+        {
+            total++;
+            var layout = AlienForge.Core.Export.ShaderLayout.Read(mat);
+            if (layout.Slots.Count == 0) { noTex++; continue; }
+            unknownSlots += layout.UnknownSlots;
+            bool nd = layout.First(AlienForge.Core.Export.TextureRole.Diffuse) is null
+                      && layout.First(AlienForge.Core.Export.TextureRole.Colour) is null;
+            byShader.TryGetValue((mat.Shader is null ? -1 : (int)mat.Shader.Ubershader), out var c);
+            byShader[(mat.Shader is null ? -1 : (int)mat.Shader.Ubershader)] = (c.mats + 1, c.noDiff + (nd ? 1 : 0));
+            if (nd)
+            {
+                noDiffuse++;
+                if (shown++ < 25)
+                    Console.WriteLine($"  {mat.Name} shader={(mat.Shader is null ? -1 : (int)mat.Shader.Ubershader)}: " + string.Join(" | ", layout.Slots.Select(x => $"[{x.Index}] {x.TextureName}")));
+            }
+        }
+        Console.WriteLine($"материалов {total}, без текстур {noTex}, с текстурами но без diffuse {noDiffuse}, слотов с неясной ролью {unknownSlots}");
+        foreach (var u in ws.Materials.Entries.Where(m => m.Shader is not null).Select(m => m.Shader.Ubershader).Distinct())
+            Console.WriteLine($"  {u}: " + string.Join(", ", CATHODE.ShaderTypes.ShaderUtility.GetSamplers(u).Select((n, i) => $"{i}:{n}")));
+        foreach (var kv in byShader.OrderByDescending(k => k.Value.noDiff).Take(15))
+            Console.WriteLine($"  shader {kv.Key}: материалов {kv.Value.mats}, без diffuse {kv.Value.noDiff}");
+        return 0;
+    }
+
+    // Отладка ANIM_CLIP_DB.BIN: имя, секция, строка и второе слово строки
+    private static int CmdClipRows(string? filter)
+    {
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var pak = Pak2Index.Open(install.AnimationPak);
+        var master = pak.Entries.First(e => e.Name.EndsWith(@"ANIM_SYS\ANIM_CLIP_DB.BIN", StringComparison.OrdinalIgnoreCase));
+        byte[] data = pak.Read(master);
+        var table = HashTableFile.TryParse(data)!;
+        var resolver = AnimNameResolver.Load(pak);
+        Console.WriteLine($"count={table.Count} tailAt={table.TailAt} tailLen={table.TailLength} ({table.TailLength / 8.0} строк по 8)");
+        int shown = 0;
+        foreach (var (key, row) in table.Pairs())
+        {
+            string? name = resolver.Name(key);
+            if (name is null) continue;
+            if (filter is not null && !name.Contains(filter, StringComparison.OrdinalIgnoreCase)) continue;
+            int at = table.TailAt + (int)row * 8;
+            uint a = BitConverter.ToUInt32(data, at), b = BitConverter.ToUInt32(data, at + 4);
+            Console.WriteLine($"row {row,6}  sec {a,10}  w2 {b,10} (0x{b:X8})  {name}");
+            if (++shown >= 40) break;
+        }
+        return 0;
+    }
+
+    private static int CmdRigs(string? filter)
+    {
+        var install = Resolve(null);
+        if (install is null) return 2;
+        var catalog = AnimationCatalog.Open(install);
+        foreach (var (id, name, clips) in catalog.ListSkeletons())
+            if (filter is null || name.Contains(filter, StringComparison.OrdinalIgnoreCase))
+                Console.WriteLine($"{name,-40} id {id,-12} клипов {clips}");
+        return 0;
+    }
+
+    private static int CmdRig(string? levelName, string? filter)
+    {
+        if (levelName is null) return 2;
+        var ws = LoadLevel(levelName, null);
+        if (ws is null) return 2;
+        var catalog = AnimationCatalog.Open(ws.Install);
+        var dumper = HavokDump.TryCreate();
+        foreach (var model in ws.FindModels(filter ?? "CHARACTERS"))
+        {
+            var g = catalog.GuessSkeleton(model.Name, model, dumper);
+            Console.WriteLine($"{model.Name,-50} нужно костей {AnimationCatalog.RequiredBoneCount(model),3}  ->  {g.name ?? "?"} (id {g.id}, костей {g.bones}) {(g.entry is null ? "НЕ НАЙДЕН" : "")}");
+        }
+        return 0;
+    }
+
     private static AssetWorkspace? LoadLevel(string levelName, string? root)
     {
         var install = Resolve(root);

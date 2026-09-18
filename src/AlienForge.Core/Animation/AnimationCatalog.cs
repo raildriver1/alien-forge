@@ -1,3 +1,4 @@
+using CATHODE;
 using System.Text;
 
 namespace AlienForge.Core.Animation;
@@ -88,6 +89,93 @@ public sealed class AnimationClipRef
         string normalised = name.Replace('/', '\\');
         int slash = normalised.LastIndexOf('\\');
         return slash >= 0 ? normalised[(slash + 1)..] : normalised;
+    }
+}
+
+/// <summary>
+/// Один клип для списка/экспорта: секция + номер клипа внутри неё. Секция
+/// (ANIM_CLIP_DB_SEC_&lt;hash&gt;.BIN) может держать сотни клипов; в списке человек
+/// должен видеть каждый клип под его настоящим именем, а не хеш секции.
+/// </summary>
+public sealed class AnimationClipItem
+{
+    public required AnimationClipRef Section { get; init; }
+
+    /// <summary>Позиция клипа в секции (и в bundle.Clips после распаковки); -1 = имя неизвестно, секция целиком.</summary>
+    public required int Index { get; init; }
+
+    /// <summary>Полное имя из таблиц строк (ANIMATION\...\WALK_FORWARD) или имя файла секции.</summary>
+    public required string FullName { get; init; }
+
+    public string ShortName
+    {
+        get
+        {
+            int cut = FullName.LastIndexOfAny(new[] { '\\', '/' });
+            return cut >= 0 && cut + 1 < FullName.Length ? FullName[(cut + 1)..] : FullName;
+        }
+    }
+
+    /// <summary>Папка клипа без общего префикса ANIMATION\ — для второй колонки списка.</summary>
+    public string Folder
+    {
+        get
+        {
+            int cut = FullName.LastIndexOfAny(new[] { '\\', '/' });
+            string folder = cut > 0 ? FullName[..cut] : string.Empty;
+            const string prefix = "ANIMATION\\";
+            if (folder.StartsWith(prefix, StringComparison.OrdinalIgnoreCase))
+                folder = folder[prefix.Length..];
+            return folder;
+        }
+    }
+
+    public string SizeText => Section.SizeText;
+
+    public string Describe()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine(FullName);
+        sb.AppendLine();
+        sb.AppendLine($"section  : {Section.ShortName}");
+        sb.AppendLine($"index    : {(Index < 0 ? "?" : Index.ToString())} / {Math.Max(Section.Names.Count, 1)}");
+        sb.AppendLine($"skeleton : {Section.SkeletonName ?? "?"} (id {Section.SkeletonId})");
+        sb.AppendLine($"offset   : {Section.Entry.Offset}");
+        sb.AppendLine($"bytes    : {Section.Entry.Length}");
+        return sb.ToString();
+    }
+
+    /// <summary>Разворачивает секции в клипы: по одной строке на каждое известное имя.</summary>
+    public static List<AnimationClipItem> Expand(IEnumerable<AnimationClipRef> sections)
+    {
+        var items = new List<AnimationClipItem>();
+        foreach (var section in sections)
+        {
+            if (section.Names.Count == 0)
+            {
+                items.Add(new AnimationClipItem { Section = section, Index = -1, FullName = section.ShortName });
+                continue;
+            }
+            foreach (var entry in section.Names)
+                items.Add(new AnimationClipItem { Section = section, Index = entry.IndexInSection, FullName = entry.FullName });
+        }
+        items.Sort((a, b) => string.Compare(a.ShortName, b.ShortName, StringComparison.OrdinalIgnoreCase));
+        return items;
+    }
+
+    /// <summary>
+    /// Выбрать из распакованной секции именно этот клип. Если порядок в bundle не
+    /// совпал с индексом (дампер вернул другое число клипов) — ищем по имени, иначе
+    /// самый длинный, как раньше.
+    /// </summary>
+    public ClipData? Pick(AnimationBundle bundle)
+    {
+        if (bundle.Clips.Count == 0)
+            return null;
+        if (Index >= 0 && Index < bundle.Clips.Count && bundle.Clips.Count == Math.Max(Section.Names.Count, 1))
+            return bundle.Clips[Index];
+        var byName = bundle.Clips.FirstOrDefault(c => string.Equals(c.Name, FullName, StringComparison.OrdinalIgnoreCase));
+        return byName ?? bundle.Clips.OrderByDescending(c => c.Frames).First();
     }
 }
 
@@ -226,6 +314,236 @@ public sealed class AnimationCatalog
 
         // Nothing matched: report the best guess so the message can name it.
         return firstGuess is null ? (0, null, null) : (Fnv1a(firstGuess), firstGuess, null);
+    }
+
+    /// <summary>
+    /// Максимальный индекс кости, на который ссылается скин модели (по палитрам
+    /// сабмешей), +1. Ригу с меньшим числом костей эта модель принадлежать не может.
+    /// 0 — модель без скина.
+    /// </summary>
+    public static int RequiredBoneCount(Models.CS2 model)
+    {
+        int max = -1;
+        foreach (var component in model.Components)
+            foreach (var lod in component.LODs)
+                foreach (var sm in lod.Submeshes)
+                    foreach (int b in sm.Bones)
+                        if (b > max) max = b;
+        return max + 1;
+    }
+
+    /// <summary>
+    /// Дополнительные имена рига, выведенные из имени папки персонажа: RIPLEY_FP ->
+    /// RIPLEY, RIPLEYFP, FEMALEFP/MALEFP/SPACESUITFP (первое лицо в игре живёт на
+    /// общих FP-ригах), SPACESUIT_RIPLEY_FP -> SPACESUIT_RIPLEY, SPACESUITFP...
+    /// Каждое имя всё равно проверяется по архиву и по числу костей.
+    /// </summary>
+    public static IEnumerable<string> DerivedSkeletonCandidates(string? modelPath)
+    {
+        string? name = SkeletonNameFor(modelPath);
+        if (name is null)
+        {
+            var parts = Segments(modelPath ?? string.Empty);
+            if (parts.Length >= 2) name = parts[^2].ToUpperInvariant();
+        }
+        if (string.IsNullOrEmpty(name))
+            yield break;
+
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase) { name };
+        IEnumerable<string> Emit(params string[] names)
+        {
+            foreach (var n in names)
+                if (!string.IsNullOrEmpty(n) && seen.Add(n))
+                    yield return n;
+        }
+
+        string[] suffixes = { "_FP", "_NAKED", "_1ST_PERSON", "_TP", "_3RD_PERSON", "_LOD", "_HIGH", "_LOW", "_DAMAGED", "_BLOODY" };
+        string bare = name;
+        bool changed = true;
+        while (changed)
+        {
+            changed = false;
+            foreach (var suf in suffixes)
+                if (bare.EndsWith(suf, StringComparison.OrdinalIgnoreCase) && bare.Length > suf.Length)
+                {
+                    bare = bare[..^suf.Length];
+                    changed = true;
+                }
+        }
+        bool firstPerson = name.Contains("_FP", StringComparison.OrdinalIgnoreCase)
+                           || name.Contains("1ST_PERSON", StringComparison.OrdinalIgnoreCase);
+
+        if (firstPerson)
+        {
+            // Общие риги первого лица идут первыми: у RIPLEY_FP скин под FEMALEFP, а не под RIPLEY
+            foreach (var n in Emit(bare + "FP", bare.Replace("_", "") + "FP"))
+                yield return n;
+            if (bare.Contains("SPACESUIT", StringComparison.OrdinalIgnoreCase))
+                foreach (var n in Emit("SPACESUITFP")) yield return n;
+            foreach (var n in Emit("FEMALEFP", "MALEFP", "SPACESUITFP")) yield return n;
+        }
+        foreach (var n in Emit(bare, bare.Replace("_", ""))) yield return n;
+        // Кусочки имени: SPACESUIT_RIPLEY -> RIPLEY, SPACESUIT
+        var pieces = bare.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        if (pieces.Length > 1)
+            for (int i = pieces.Length - 1; i >= 0; i--)
+                foreach (var n in Emit(pieces[i])) yield return n;
+    }
+
+    /// <summary>
+    /// Риг для модели с проверкой: сначала кандидаты по пути (как ResolveSkeleton),
+    /// потом выведенные из имени; каждый должен быть в архиве и иметь не меньше
+    /// костей, чем требует скин модели. dumper нужен, чтобы посчитать кости
+    /// кандидата (кэшируется). Возвращает (id, имя, запись, число костей).
+    /// </summary>
+    public (uint id, string? name, Pak2Entry? entry, int bones) GuessSkeleton(string? modelPath, Models.CS2? model, HavokDump? dumper)
+    {
+        int required = model is null ? 0 : RequiredBoneCount(model);
+        (uint, string?, Pak2Entry?, int)? firstInArchive = null;
+
+        var candidates = new List<string>();
+        var seen = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+        foreach (var c in SkeletonCandidates(modelPath)) if (seen.Add(c)) candidates.Add(c);
+        foreach (var c in DerivedSkeletonCandidates(modelPath)) if (seen.Add(c)) candidates.Add(c);
+        foreach (var c in FileNameCandidates(modelPath)) if (seen.Add(c)) candidates.Add(c);
+
+        foreach (string candidate in candidates)
+        {
+            uint id = Fnv1a(candidate);
+            if (!_skeletons.TryGetValue(id, out var entry))
+                continue;
+            int bones = BoneCountOf(id, entry, dumper);
+            firstInArchive ??= (id, candidate, entry, bones);
+            if (required == 0 || bones < 0 || bones >= required)
+            {
+                SaveBoneCountCache();
+                return (id, candidate, entry, bones);
+            }
+        }
+
+        // Ни одно имя не подошло — ищем по числу костей среди всех ригов, у которых
+        // есть клипы (ANDROID -> MALE: у андроида нет своего рига, скин под MALE на
+        // 72 кости). Точное совпадение важнее, при равенстве — риг с бОльшим числом
+        // клипов. Счётчики костей кэшируются на диске, скан идёт один раз.
+        if (required > 0 && dumper is not null)
+        {
+            (uint, string, Pak2Entry, int)? exact = null, larger = null;
+            foreach (var (id, name, clips) in ListSkeletons())
+            {
+                if (clips == 0) break; // список отсортирован: сначала риги с клипами
+                if (name.Contains("_MAP_", StringComparison.OrdinalIgnoreCase)) continue;
+                var entry = _skeletons[id];
+                int bones = BoneCountOf(id, entry, dumper);
+                if (bones == required) { exact ??= (id, name, entry, bones); break; }
+                if (bones > required) larger ??= (id, name, entry, bones);
+            }
+            SaveBoneCountCache();
+            if ((exact ?? larger) is { } byBones)
+                return byBones;
+        }
+
+        if (firstInArchive is { } f)
+            return f;
+        var (gid, gname, gentry) = ResolveSkeleton(modelPath);
+        return (gid, gname, gentry, -1);
+    }
+
+    /// <summary>
+    /// Кандидаты из имени файла: HEAD_ANDY_S.cs2 -> ANDY_S, S; у голов NPC свой риг
+    /// назван по персонажу (HEAD_ADRIANA -> ADRIANA, 113 костей с лицевыми).
+    /// Плюс FEMALENPC/MALENPC для тел из папки NPC.
+    /// </summary>
+    public static IEnumerable<string> FileNameCandidates(string? modelPath)
+    {
+        if (string.IsNullOrWhiteSpace(modelPath))
+            yield break;
+        var parts = Segments(modelPath);
+        string leaf = Path.GetFileNameWithoutExtension(parts[^1]).ToUpperInvariant();
+        var pieces = leaf.Split('_', StringSplitOptions.RemoveEmptyEntries);
+        for (int i = 1; i < pieces.Length; i++)
+            yield return string.Join('_', pieces, i, pieces.Length - i);
+        for (int i = pieces.Length - 1; i > 0; i--)
+            yield return string.Join('_', pieces, 0, i);
+
+        bool npc = Array.Exists(parts, x => x.Equals("NPC", StringComparison.OrdinalIgnoreCase));
+        if (npc)
+        {
+            if (Array.Exists(parts, x => x.Equals("FEMALE", StringComparison.OrdinalIgnoreCase)))
+                yield return "FEMALENPC";
+            else
+                yield return "MALENPC";
+        }
+    }
+
+    private bool _boneCacheLoaded;
+    private bool _boneCacheDirty;
+
+    private string BoneCountCachePath
+    {
+        get
+        {
+            var key = Fnv1a(_pak.Path.ToUpperInvariant() + ":" + new FileInfo(_pak.Path).Length);
+            var dir = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "AlienForge");
+            return Path.Combine(dir, $"bonecounts_{key:X8}.txt");
+        }
+    }
+
+    private void LoadBoneCountCache()
+    {
+        if (_boneCacheLoaded) return;
+        _boneCacheLoaded = true;
+        try
+        {
+            if (!File.Exists(BoneCountCachePath)) return;
+            foreach (var line in File.ReadAllLines(BoneCountCachePath))
+            {
+                var kv = line.Split(' ');
+                if (kv.Length == 2 && uint.TryParse(kv[0], out uint id) && int.TryParse(kv[1], out int n) && n >= 0)
+                    _boneCounts.TryAdd(id, n);
+            }
+        }
+        catch { }
+    }
+
+    private void SaveBoneCountCache()
+    {
+        if (!_boneCacheDirty) return;
+        try
+        {
+            Directory.CreateDirectory(Path.GetDirectoryName(BoneCountCachePath)!);
+            var lines = new List<string>();
+            foreach (var kv in _boneCounts)
+                if (kv.Value >= 0) lines.Add($"{kv.Key} {kv.Value}");
+            File.WriteAllLines(BoneCountCachePath, lines);
+            _boneCacheDirty = false;
+        }
+        catch { }
+    }
+
+    private readonly Dictionary<uint, int> _boneCounts = new();
+
+    /// <summary>Число костей рига по его Havok-скелету; -1, если распаковщика нет.</summary>
+    public int BoneCountOf(uint skeletonId, Pak2Entry entry, HavokDump? dumper)
+    {
+        LoadBoneCountCache();
+        if (_boneCounts.TryGetValue(skeletonId, out int cached))
+            return cached;
+        int count = -1;
+        if (dumper is not null)
+        {
+            try
+            {
+                byte[] raw = _pak.Read(entry);
+                byte[] hkx = raw;
+                for (int at = 0; at + 4 <= Math.Min(raw.Length, 64); at++)
+                    if (BitConverter.ToUInt32(raw, at) == HavokPackfileMagic) { hkx = raw[at..]; break; }
+                count = dumper.LoadSkeletonOnly(hkx).Count;
+            }
+            catch { count = -1; }
+        }
+        _boneCounts[skeletonId] = count;
+        if (count >= 0) _boneCacheDirty = true;
+        return count;
     }
 
     public string DescribeSkeleton(string? modelPath, uint? forceId = null)
@@ -410,10 +728,15 @@ public sealed class AnimationCatalog
     public static int ApplyNames(AnimationClipRef clipRef, AnimationBundle bundle)
     {
         int applied = 0;
-        for (int i = 0; i < bundle.Clips.Count && i < clipRef.Names.Count; i++)
+        // Имя клипу — по его номеру в секции (второе слово строки ANIM_CLIP_DB),
+        // а не по порядку в списке имён
+        foreach (var entry in clipRef.Names)
         {
-            bundle.Clips[i].Name = clipRef.Names[i].FullName;
-            bundle.Clips[i].Container = clipRef.ShortName;
+            int slot = entry.IndexInSection;
+            if (slot < 0 || slot >= bundle.Clips.Count)
+                continue;
+            bundle.Clips[slot].Name = entry.FullName;
+            bundle.Clips[slot].Container = clipRef.ShortName;
             applied++;
         }
         return applied;

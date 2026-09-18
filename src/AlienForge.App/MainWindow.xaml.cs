@@ -25,6 +25,8 @@ public partial class MainWindow : Window
     private Textures.TEX4? _selectedTexture;
     private AnimationCatalog? _catalog;
     private List<AnimationClipRef>? _clips;
+    /// <summary>Клипы по одному, с настоящими именами (секции развёрнуты).</summary>
+    private List<AnimationClipItem>? _items;
     private bool _busy;
 
     // animation playback
@@ -45,6 +47,7 @@ public partial class MainWindow : Window
     private double _lightAzimuth = 215, _lightElevation = 35;
     private double _lightIntensity = 1.0, _ambientLevel = 0.34;
     private bool _lightFollowsCamera;
+    private bool _dragZoom;
 
     // orbit camera state
     private double _yaw = 0.6, _pitch = 0.35, _distance = 4;
@@ -64,6 +67,94 @@ public partial class MainWindow : Window
     private void OnWindowLoaded(object? sender, RoutedEventArgs e)
     {
         DetectGame(quiet: true);
+
+        // Автотест GUI-пути: AlienForge.exe --autotest <уровень> <фрагмент модели> <out.glb> [log]
+        var args = Environment.GetCommandLineArgs();
+        int at = Array.IndexOf(args, "--autotest");
+        if (at >= 0 && args.Length > at + 3)
+            _ = RunAutoTest(args[at + 1], args[at + 2], args[at + 3],
+                args.Length > at + 4 ? args[at + 4] : Path.Combine(AppContext.BaseDirectory, "autotest.log"));
+    }
+
+    private string? _autoLog;
+
+    private void AutoLog(string line)
+    {
+        if (_autoLog is null) return;
+        File.AppendAllText(_autoLog, $"[{DateTime.Now:HH:mm:ss}] {line}" + Environment.NewLine);
+    }
+
+    private async System.Threading.Tasks.Task WaitIdle()
+    {
+        while (_busy)
+            await System.Threading.Tasks.Task.Delay(100);
+    }
+
+    /// <summary>
+    /// Тот же путь, что и руками: уровень -> модель -> «Найти анимации» -> первый
+    /// клип -> «Сохранить .glb». Каждый статус пишется в лог, окно закрывается.
+    /// </summary>
+    private async System.Threading.Tasks.Task RunAutoTest(string levelName, string modelFragment, string outPath, string log)
+    {
+        _autoLog = log;
+        File.WriteAllText(log, "");
+        try
+        {
+            AutoLog($"install={_install?.Root}");
+            if (_install is null) { AutoLog("нет игры"); Close(); return; }
+            var levels = (List<LevelRef>)LevelBox.ItemsSource;
+            int idx = levels.FindIndex(l => l.Name.Contains(levelName, StringComparison.OrdinalIgnoreCase));
+            AutoLog($"level index={idx}");
+            if (idx < 0) { Close(); return; }
+            await WaitIdle(); // уровень по умолчанию уже грузится после DetectGame
+            LevelBox.SelectedIndex = idx; // смена выбора сама запускает загрузку
+            await System.Threading.Tasks.Task.Delay(200);
+            await WaitIdle();
+            if (LevelBox.SelectedIndex == idx && _workspace is not null && !_workspace.Level.Name.Contains(levelName, StringComparison.OrdinalIgnoreCase))
+            {
+                OnLoadLevel(this, new RoutedEventArgs());
+                await System.Threading.Tasks.Task.Delay(200);
+                await WaitIdle();
+            }
+            AutoLog($"после загрузки: {StatusText.Text}");
+            if (_workspace is null) { Close(); return; }
+
+            var model = _workspace.FindModelByPath(modelFragment) ?? _workspace.FindModels(modelFragment).FirstOrDefault();
+            AutoLog($"модель: {model?.Name ?? "не найдена"}");
+            if (model is null) { Close(); return; }
+            _selectedModel = model;
+            ShowModel(model);
+            AutoLog($"после ShowModel: {StatusText.Text}");
+
+            OnLoadAnimations(this, new RoutedEventArgs());
+            await System.Threading.Tasks.Task.Delay(200);
+            await WaitIdle();
+            AutoLog($"после поиска анимаций: {StatusText.Text} | клипов {_clips?.Count ?? -1} | summary: {AnimationSummary.Text}");
+            if (_clips is null || _clips.Count == 0) { Close(); return; }
+            foreach (var c in _clips.Take(5)) AutoLog($"   {c.DisplayName}  ({c.ShortName}, имён {c.Names.Count})");
+
+            _items ??= AnimationClipItem.Expand(_clips);
+            var first = _items.FirstOrDefault(i => i.ShortName.Contains("WALK_FORWARD", StringComparison.OrdinalIgnoreCase)) ?? _items[0];
+            AutoLog($"клипов в списке: {_items.Count}; выбран {first.FullName}");
+            AnimationList.SelectedItem = first;
+            await ExportWithAnimations(new[] { first.Section }, outPath, first);
+            AutoLog($"после экспорта одного: {StatusText.Text}");
+
+            // и «Проиграть» — второй путь, где могла быть ошибка
+            OnPlayAnimation(this, new RoutedEventArgs());
+            await System.Threading.Tasks.Task.Delay(300);
+            await WaitIdle();
+            AutoLog($"после Play: {StatusText.Text}");
+        }
+        catch (Exception ex)
+        {
+            AutoLog($"ИСКЛЮЧЕНИЕ: {ex}");
+        }
+        finally
+        {
+            AutoLog("конец");
+            Close();
+        }
     }
 
     private void DetectGame(bool quiet)
@@ -213,6 +304,7 @@ public partial class MainWindow : Window
             MapEmpty.Visibility = Visibility.Visible;
             AnimationList.ItemsSource = null;
             _clips = null;
+            _items = null;
             ExportClipButton.IsEnabled = false;
             ExportRawClipButton.IsEnabled = false;
             ExportAllClipsButton.IsEnabled = false;
@@ -395,12 +487,12 @@ public partial class MainWindow : Window
                 Title = Loc.T("HUB_ANIMATIONS"),
                 Subtitle = clips.Count > 0 ? clips.Count.ToString() : Loc.T("HUB_ANIM_HINT"),
             },
-            clips.Select(clip => new MapNode
+            (_items ??= AnimationClipItem.Expand(clips)).Select(item => new MapNode
             {
                 Kind = MapNodeKind.Animation,
-                Title = clip.ShortName,
-                Subtitle = clip.SizeText,
-                Payload = clip,
+                Title = item.ShortName,
+                Subtitle = item.Folder,
+                Payload = item,
             }).ToList()));
 
         MapView.Build(centre, groups);
@@ -420,8 +512,9 @@ public partial class MainWindow : Window
                 ShowInfo(DescribeMaterial(material));
                 SelectTab(TabInfo);
                 break;
-            case AnimationClipRef clip:
+            case AnimationClipItem clip:
                 AnimationList.SelectedItem = clip;
+                AnimationList.ScrollIntoView(clip);
                 ShowInfo(clip.Describe());
                 SelectTab(TabAnimation);
                 break;
@@ -516,11 +609,14 @@ public partial class MainWindow : Window
 
     private void UpdateCamera()
     {
+        // Турнтейбл как в Blender: тангаж не ограничен, за полюсом камера
+        // переворачивается (up меняет знак), так что модель можно крутить на 360° по
+        // обеим осям и смотреть снизу.
         double cp = Math.Cos(_pitch), sp = Math.Sin(_pitch);
         var offset = new Vector3D(Math.Sin(_yaw) * cp, sp, Math.Cos(_yaw) * cp) * _distance;
         Camera.Position = _target + offset;
         Camera.LookDirection = -offset;
-        Camera.UpDirection = new Vector3D(0, 1, 0);
+        Camera.UpDirection = new Vector3D(0, cp >= 0 ? 1 : -1, 0);
         Camera.NearPlaneDistance = Math.Max(0.001, _distance * 0.005);
         Camera.FarPlaneDistance = _distance * 40;
 
@@ -733,12 +829,18 @@ public partial class MainWindow : Window
     {
         _dragFrom = e.GetPosition(ViewportHost);
 
-        // Middle and right both pan, and Alt with the left button does too: a trackpad
-        // or a two-button mouse has no comfortable middle click.
+        // Раскладка Blender: СКМ — вращение, Shift+СКМ — сдвиг, Ctrl+СКМ — зум
+        // перетаскиванием. Плюс ЛКМ — вращение, ПКМ и Alt+ЛКМ — сдвиг для мыши без
+        // удобного колеса.
         bool altHeld = (Keyboard.Modifiers & ModifierKeys.Alt) != 0;
-        _dragPan = e.ChangedButton is MouseButton.Right or MouseButton.Middle
-                   || (e.ChangedButton == MouseButton.Left && altHeld);
-        _dragOrbit = e.ChangedButton == MouseButton.Left && !altHeld;
+        bool shiftHeld = (Keyboard.Modifiers & ModifierKeys.Shift) != 0;
+        bool ctrlHeld = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        _dragZoom = e.ChangedButton == MouseButton.Middle && ctrlHeld;
+        _dragPan = !_dragZoom && (e.ChangedButton == MouseButton.Right
+                   || (e.ChangedButton == MouseButton.Middle && shiftHeld)
+                   || (e.ChangedButton == MouseButton.Left && altHeld));
+        _dragOrbit = !_dragZoom && !_dragPan
+                     && (e.ChangedButton == MouseButton.Left || e.ChangedButton == MouseButton.Middle);
         // Focus so the keyboard shortcuts below reach the viewport.
         ViewportHost.Focus();
         ViewportHost.CaptureMouse();
@@ -746,13 +848,13 @@ public partial class MainWindow : Window
 
     private void OnViewportMouseUp(object sender, MouseButtonEventArgs e)
     {
-        _dragOrbit = _dragPan = false;
+        _dragOrbit = _dragPan = _dragZoom = false;
         ViewportHost.ReleaseMouseCapture();
     }
 
     private void OnViewportMouseMove(object sender, MouseEventArgs e)
     {
-        if (!_dragOrbit && !_dragPan)
+        if (!_dragOrbit && !_dragPan && !_dragZoom)
             return;
         var now = e.GetPosition(ViewportHost);
         double dx = now.X - _dragFrom.X, dy = now.Y - _dragFrom.Y;
@@ -765,8 +867,15 @@ public partial class MainWindow : Window
             // barely moves; tied to height, dragging the full height is half a turn
             // whatever the window size.
             double perPixel = Math.PI / Math.Max(200.0, ViewportHost.ActualHeight);
-            _yaw -= dx * perPixel;
-            _pitch = Math.Clamp(_pitch + dy * perPixel, -1.45, 1.45);
+            // Когда камера перевёрнута (за полюсом), горизонтальное вращение
+            // инвертируется, иначе движение мыши идёт «против» картинки.
+            bool flipped = Math.Cos(_pitch) < 0;
+            _yaw -= dx * perPixel * (flipped ? -1 : 1);
+            _pitch = WrapAngle(_pitch + dy * perPixel);
+        }
+        else if (_dragZoom)
+        {
+            SetDistance(_distance * Math.Exp(dy * 0.01));
         }
         else
         {
@@ -781,6 +890,27 @@ public partial class MainWindow : Window
         UpdateCamera();
     }
 
+    private static double WrapAngle(double a)
+    {
+        while (a > Math.PI) a -= 2 * Math.PI;
+        while (a < -Math.PI) a += 2 * Math.PI;
+        return a;
+    }
+
+    private void SetDistance(double next)
+    {
+        _distance = Math.Clamp(next, 0.02, 20000);
+        UpdateCamera();
+    }
+
+    /// <summary>Поворот камеры к стандартному виду (numpad как в Blender).</summary>
+    private void SnapView(double yaw, double pitch)
+    {
+        _yaw = yaw;
+        _pitch = pitch;
+        UpdateCamera();
+    }
+
     /// <summary>Forward, screen-right and screen-up of the camera, all unit length.</summary>
     private (Vector3D forward, Vector3D right, Vector3D up) CameraAxes()
     {
@@ -789,7 +919,7 @@ public partial class MainWindow : Window
             forward = new Vector3D(0, 0, -1);
         forward.Normalize();
 
-        var right = Vector3D.CrossProduct(forward, new Vector3D(0, 1, 0));
+        var right = Vector3D.CrossProduct(forward, Camera.UpDirection);
         if (right.Length < 1e-6)
             right = new Vector3D(1, 0, 0);   // looking straight up or down
         right.Normalize();
@@ -891,15 +1021,33 @@ public partial class MainWindow : Window
             return;
         forward.Normalize();
 
-        var right = Vector3D.CrossProduct(new Vector3D(0, 1, 0), forward);
+        var right = Vector3D.CrossProduct(Camera.UpDirection, forward);
         if (right.Length < 1e-6)
             right = new Vector3D(1, 0, 0);
         right.Normalize();
-        var up = new Vector3D(0, 1, 0);
+        var up = Camera.UpDirection;
 
         double step = Math.Max(0.02, _distance * 0.08);
         if ((Keyboard.Modifiers & ModifierKeys.Shift) != 0)
             step *= 4;
+
+        // Numpad как в Blender: 1/3/7 — спереди/справа/сверху, Ctrl — с обратной
+        // стороны, 4/6 и 8/2 — шаг 15°, 9 — развернуть на 180°, Home/F — вписать.
+        bool ctrl = (Keyboard.Modifiers & ModifierKeys.Control) != 0;
+        const double step15 = Math.PI / 12;
+        switch (e.Key)
+        {
+            case Key.NumPad1: SnapView(ctrl ? Math.PI : 0, 0); e.Handled = true; return;
+            case Key.NumPad3: SnapView(ctrl ? -Math.PI / 2 : Math.PI / 2, 0); e.Handled = true; return;
+            case Key.NumPad7: SnapView(_yaw, ctrl ? -Math.PI / 2 + 1e-4 : Math.PI / 2 - 1e-4); e.Handled = true; return;
+            case Key.NumPad4: _yaw += step15; UpdateCamera(); e.Handled = true; return;
+            case Key.NumPad6: _yaw -= step15; UpdateCamera(); e.Handled = true; return;
+            case Key.NumPad8: _pitch = WrapAngle(_pitch + step15); UpdateCamera(); e.Handled = true; return;
+            case Key.NumPad2: _pitch = WrapAngle(_pitch - step15); UpdateCamera(); e.Handled = true; return;
+            case Key.NumPad9: _yaw += Math.PI; UpdateCamera(); e.Handled = true; return;
+            case Key.Add or Key.OemPlus: SetDistance(_distance / 1.2); e.Handled = true; return;
+            case Key.Subtract or Key.OemMinus: SetDistance(_distance * 1.2); e.Handled = true; return;
+        }
 
         Vector3D move = default;
         switch (e.Key)
@@ -911,7 +1059,7 @@ public partial class MainWindow : Window
             case Key.E or Key.PageUp: move = up * step; break;
             case Key.Q or Key.PageDown: move = -up * step; break;
 
-            case Key.F:
+            case Key.F or Key.Home or Key.Decimal:
                 // Frame whatever is on screen, the usual shortcut for "show me it all".
                 if (SceneRoot.Content is Model3DGroup group)
                     FrameCamera(group.Bounds);
@@ -1105,6 +1253,74 @@ public partial class MainWindow : Window
             new FileInfo(dialog.FileName).Length / 1048576.0));
     }
 
+    /// <summary>
+    /// Уровень целиком в glTF ровно как в игре: иерархия композитов из COMMANDS,
+    /// позиции алиасов/прокси, MaterialMappings, без окклюдеров, LOD и служебных
+    /// мешей (см. Core/Export/LevelExporter). Загрузка через CathodeLib.Level идёт
+    /// заново — экспортёру нужны COMMANDS и REDS, которых в AssetWorkspace нет.
+    /// </summary>
+    private void OnBrowseUi(object sender, RoutedEventArgs e)
+    {
+        if (_install is null)
+            return;
+        try
+        {
+            var window = new UiBrowserWindow(_install) { Owner = this };
+            window.Show();
+        }
+        catch (Exception ex)
+        {
+            SetStatus(ex.Message);
+        }
+    }
+
+    private async void OnExportScene(object sender, RoutedEventArgs e)
+    {
+        if (_install is null || _busy || LevelBox.SelectedItem is not LevelRef level)
+            return;
+
+        var options = LevelExportDialog.Ask(this);
+        if (options is null)
+            return;
+
+        var dialog = new SaveFileDialog
+        {
+            Title = Loc.T("DLG_PICK_OUT"),
+            Filter = options.Gltf ? "glTF (*.gltf)|*.gltf" : Loc.T("DLG_GLB_FILTER"),
+            FileName = level.Name + (options.Gltf ? ".gltf" : ".glb"),
+        };
+        if (dialog.ShowDialog(this) != true)
+            return;
+
+        SetBusy(true);
+        var sw = System.Diagnostics.Stopwatch.StartNew();
+        string root = _install.Root;
+        string outPath = dialog.FileName;
+        try
+        {
+            AlienForge.Core.Export.LevelExporter.Log = line =>
+                Dispatcher.BeginInvoke(new Action(() => SetStatus(Loc.F("SCENE_STATUS", level.Name, line))));
+            int code = await System.Threading.Tasks.Task.Run(() =>
+            {
+                var lvl = AlienForge.Core.Export.LevelExporter.OpenLevel(root, level.Directory);
+                return AlienForge.Core.Export.LevelExporter.Run(lvl, level.Name, outPath, options);
+            });
+            if (code == 0 && File.Exists(outPath))
+                SetStatus(Loc.F("SCENE_DONE", outPath, new FileInfo(outPath).Length / 1048576.0, sw.Elapsed.TotalSeconds));
+            else
+                SetStatus(Loc.F("SCENE_FAIL", $"код {code}"));
+        }
+        catch (Exception ex)
+        {
+            SetStatus(Loc.F("SCENE_FAIL", ex.Message));
+        }
+        finally
+        {
+            AlienForge.Core.Export.LevelExporter.Log = Console.WriteLine;
+            SetBusy(false);
+        }
+    }
+
     private async void OnExportLevel(object sender, RoutedEventArgs e)
     {
         if (_workspace is null || _busy)
@@ -1175,16 +1391,25 @@ public partial class MainWindow : Window
 
             // Indexing is quick, but the clip sweep reads a header per record across
             // 26 thousand records, so it is kept off the UI thread.
+            var model = _selectedModel;
             var found = await Task.Run(() =>
             {
                 catalog ??= AnimationCatalog.Open(install);
-                return (catalog, clips: catalog.ClipsFor(modelName),
-                    rigs: catalog.ListSkeletons());
+                // Риг подбирается сам: по пути, по имени (RIPLEY_FP -> FEMALEFP...) и
+                // с проверкой числа костей против скина модели
+                var guess = catalog.GuessSkeleton(modelName, model, HavokDump.TryCreate());
+                var (autoId, _, autoEntry) = catalog.ResolveSkeleton(modelName);
+                uint? force = guess.entry is not null && (autoEntry is null || guess.id != autoId) ? guess.id : null;
+                return (catalog, clips: catalog.ClipsFor(modelName, force),
+                    rigs: catalog.ListSkeletons(), force, guess);
             });
 
             _catalog = found.catalog;
             _clips = found.clips;
-            _forcedSkeleton = null;
+            _items = null;
+            _forcedSkeleton = found.force;
+            if (found.force is not null)
+                SetStatus($"{Loc.T("ANIM_SKELETON")}: {found.guess.name} ({found.guess.bones} {Loc.T("ANIM_BONES_SHORT")})");
             FillSkeletonPicker(found.rigs, modelName);
             ApplyClipFilter();
             ShowAnimationSummary(modelName);
@@ -1266,6 +1491,7 @@ public partial class MainWindow : Window
             var catalog = _catalog;
             uint? force = _forcedSkeleton;
             _clips = await Task.Run(() => catalog.ClipsFor(modelName, force));
+            _items = null;
             ApplyClipFilter();
             ShowAnimationSummary(modelName);
         }
@@ -1313,20 +1539,21 @@ public partial class MainWindow : Window
     {
         if (_clips is null)
             return;
+        _items ??= AnimationClipItem.Expand(_clips);
         string needle = ClipFilterBox.Text.Trim();
         AnimationList.ItemsSource = needle.Length == 0
-            ? _clips
-            : _clips.Where(c => c.ShortName.Contains(needle, StringComparison.OrdinalIgnoreCase))
+            ? _items
+            : _items.Where(c => c.FullName.Contains(needle, StringComparison.OrdinalIgnoreCase))
                     .ToList();
     }
 
     private void OnAnimationSelected(object sender, SelectionChangedEventArgs e)
     {
-        bool has = AnimationList.SelectedItem is AnimationClipRef;
+        bool has = AnimationList.SelectedItem is AnimationClipItem;
         ExportClipButton.IsEnabled = has;
         ExportRawClipButton.IsEnabled = has;
         PlayButton.IsEnabled = has && _built is not null;
-        if (AnimationList.SelectedItem is AnimationClipRef clip)
+        if (AnimationList.SelectedItem is AnimationClipItem clip)
             ShowInfo(clip.Describe());
     }
 
@@ -1339,8 +1566,9 @@ public partial class MainWindow : Window
     {
         if (_catalog is null || _built is null || _selectedModel is null || _busy)
             return;
-        if (AnimationList.SelectedItem is not AnimationClipRef clip)
+        if (AnimationList.SelectedItem is not AnimationClipItem item)
             return;
+        var clip = item.Section;
 
         var dump = HavokDump.TryCreate();
         if (dump is null)
@@ -1350,7 +1578,7 @@ public partial class MainWindow : Window
         }
 
         SetBusy(true);
-        SetStatus(Loc.F("ANIM_DECODING", clip.ShortName));
+        SetStatus(Loc.F("ANIM_DECODING", item.ShortName));
         try
         {
             var catalog = _catalog;
@@ -1376,8 +1604,8 @@ public partial class MainWindow : Window
             }
 
             _bundle = bundle;
-            // A container can hold several animations; the longest is the real one.
-            _clip = bundle.Clips.OrderByDescending(c => c.Frames).First();
+            // Секция может держать сотни клипов — играем именно выбранный
+            _clip = item.Pick(bundle) ?? bundle.Clips.OrderByDescending(c => c.Frames).First();
             _skinners = _built.Parts3D
                 .Select(part => new MeshSkinner(part.Mesh))
                 .ToList();
@@ -1514,19 +1742,19 @@ public partial class MainWindow : Window
     private async void OnExportAnimation(object sender, RoutedEventArgs e)
     {
         if (_catalog is null || _selectedModel is null || _workspace is null
-            || AnimationList.SelectedItem is not AnimationClipRef clip)
+            || AnimationList.SelectedItem is not AnimationClipItem item)
             return;
 
         var dialog = new SaveFileDialog
         {
             Title = Loc.T("DLG_PICK_OUT"),
             Filter = Loc.T("DLG_GLB_FILTER"),
-            FileName = Path.ChangeExtension(AssetNaming.Flatten(clip.DisplayName), ".glb"),
+            FileName = Path.ChangeExtension(AssetNaming.Flatten(item.ShortName), ".glb"),
         };
         if (dialog.ShowDialog(this) != true)
             return;
 
-        await ExportWithAnimations(new[] { clip }, dialog.FileName);
+        await ExportWithAnimations(new[] { item.Section }, dialog.FileName, item);
     }
 
     /// <summary>Every clip of this character in one file, ready to browse in Blender.</summary>
@@ -1551,7 +1779,8 @@ public partial class MainWindow : Window
     /// Decodes the given sections, names their clips, and writes model, skin and
     /// animations into one .glb.
     /// </summary>
-    private async Task ExportWithAnimations(IReadOnlyList<AnimationClipRef> sections, string path)
+    private async Task ExportWithAnimations(IReadOnlyList<AnimationClipRef> sections, string path,
+        AnimationClipItem? only = null)
     {
         if (_catalog is null || _workspace is null || _selectedModel is null)
             return;
@@ -1594,7 +1823,14 @@ public partial class MainWindow : Window
                         // Additive clips are deltas meant to be layered, and on their own
                         // they read as a mesh that barely moves. Kept, but they are not
                         // what makes the export useful.
-                        clips.AddRange(bundle.Clips);
+                        if (only is not null && only.Section == section)
+                        {
+                            var picked = only.Pick(bundle);
+                            if (picked is not null)
+                                clips.Add(picked);
+                        }
+                        else
+                            clips.AddRange(bundle.Clips);
                     }
                     catch (Exception)
                     {
@@ -1637,13 +1873,14 @@ public partial class MainWindow : Window
     /// </summary>
     private void OnExportAnimationRaw(object sender, RoutedEventArgs e)
     {
-        if (_catalog is null || AnimationList.SelectedItem is not AnimationClipRef clip)
+        if (_catalog is null || AnimationList.SelectedItem is not AnimationClipItem item)
             return;
+        var clip = item.Section;
         var dialog = new SaveFileDialog
         {
             Title = Loc.T("DLG_PICK_OUT"),
             Filter = Loc.T("DLG_HKX_FILTER"),
-            FileName = Path.ChangeExtension(AssetNaming.Flatten(clip.ShortName), ".hkx"),
+            FileName = Path.ChangeExtension(AssetNaming.Flatten(item.ShortName), ".hkx"),
         };
         if (dialog.ShowDialog(this) != true)
             return;

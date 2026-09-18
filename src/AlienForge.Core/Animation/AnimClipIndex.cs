@@ -133,11 +133,18 @@ public sealed class AnimClipIndex
             }
 
             uint section = BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(at, 4));
+            // Второе слово строки — НОМЕР клипа внутри секции (0..N-1); у клипа,
+            // живущего в своей секции один, там 0xFFFFFFFF. Раньше номер
+            // выводился из порядка строк таблицы, и в общих секциях (например,
+            // ALIEN\LOCOMOTION — 300+ клипов в одной) имена съезжали: под
+            // «FORWARD_TURN_90» играло убийство.
+            uint slot = at + 8 <= data.Length ? BinaryPrimitives.ReadUInt32LittleEndian(data.AsSpan(at + 4, 4)) : 0xFFFFFFFF;
             var entry = new ClipNameEntry
             {
                 FullName = name,
                 SectionHash = section,
                 Row = (int)row,
+                IndexInSection = slot == 0xFFFFFFFF ? 0 : (int)slot,
             };
             index.All.Add(entry);
             index._byName[name] = entry;
@@ -153,11 +160,9 @@ public sealed class AnimClipIndex
         // Within a section, the row number orders the clips. Havok hands them back in
         // the order they are stored, so sorting by row lines the two up.
         foreach (var list in index._bySection.Values)
-        {
-            list.Sort((a, b) => a.Row.CompareTo(b.Row));
-            for (int i = 0; i < list.Count; i++)
-                list[i].IndexInSection = i;
-        }
+            list.Sort((a, b) => a.IndexInSection != b.IndexInSection
+                ? a.IndexInSection.CompareTo(b.IndexInSection)
+                : a.Row.CompareTo(b.Row));
         return index;
     }
 }

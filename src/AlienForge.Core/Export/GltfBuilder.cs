@@ -284,14 +284,16 @@ public sealed class GltfBuilder
         return AddAccessor(view, ComponentFloat, values.Count, "VEC4");
     }
 
-    public int AddAnimation(string name, JsonArray channels, JsonArray samplers)
+    public int AddAnimation(string name, JsonArray channels, JsonArray samplers, JsonObject? extras = null)
     {
-        _animations.Add(new JsonObject
+        var anim = new JsonObject
         {
             ["name"] = name,
             ["channels"] = channels,
             ["samplers"] = samplers,
-        });
+        };
+        if (extras is not null) anim["extras"] = extras;
+        _animations.Add(anim);
         return _animations.Count - 1;
     }
 
@@ -335,9 +337,18 @@ public sealed class GltfBuilder
         return _textures.Count - 1;
     }
 
+    private readonly HashSet<string> _extensionsUsed = new();
+
+    /// <summary>Объявляет расширение glTF в extensionsUsed (например KHR_texture_transform).</summary>
+    public void UseExtension(string name) => _extensionsUsed.Add(name);
+
+    public int TextureCount => _textures.Count;
+
     public int AddMaterial(JsonObject material)
     {
         _materials.Add(material);
+        if (material.ToJsonString().Contains("KHR_texture_transform"))
+            UseExtension("KHR_texture_transform");
         return _materials.Count - 1;
     }
 
@@ -378,6 +389,12 @@ public sealed class GltfBuilder
         };
         if (extras is not null)
             root["extras"] = extras;
+        if (_extensionsUsed.Count > 0)
+        {
+            var used = new JsonArray();
+            foreach (var ext in _extensionsUsed) used.Add(ext);
+            root["extensionsUsed"] = used;
+        }
 
         var sceneNodes = new JsonArray();
         foreach (int n in sceneRootNodes)

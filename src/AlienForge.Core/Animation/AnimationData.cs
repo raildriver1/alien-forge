@@ -159,23 +159,19 @@ public static class PoseEvaluator
                 if (track.Bone >= 0 && track.Bone < byBone.Length)
                     byBone[track.Bone] = track;
 
-        // A genuinely single-frame clip has one key everywhere, and there the keys are
-        // the only data there is.
-        bool oneKeyMeansUnset = clip is { Frames: > 1 };
-
         var world = new Matrix4x4[skeleton.Count];
         for (int i = 0; i < skeleton.Count; i++)
         {
             var bone = skeleton.Bones[i];
             var track = byBone[i];
 
-            // Bones the clip does not touch keep their bind pose.
-            Vector3 t = Animated(track?.Translation, oneKeyMeansUnset)
-                ? track!.TranslationAt(frame, bone.Translation) : bone.Translation;
-            Quaternion r = Animated(track?.Rotation, oneKeyMeansUnset)
-                ? track!.RotationAt(frame, bone.Rotation) : bone.Rotation;
-            Vector3 s = Animated(track?.Scale, oneKeyMeansUnset)
-                ? track!.ScaleAt(frame, bone.Scale) : bone.Scale;
+            // Bones the clip does not touch keep their bind pose. Одноключевой канал
+            // берём, если это не заглушка (см. IsPlaceholder): статические позы
+            // (ALIEN_COVERMAG_POSES и т.п.) состоят целиком из одноключевых каналов
+            // с реальными значениями — 98 из 127 костей отличаются от bind.
+            Vector3 t = UseTranslation(track) ? track!.TranslationAt(frame, bone.Translation) : bone.Translation;
+            Quaternion r = UseRotation(track) ? track!.RotationAt(frame, bone.Rotation) : bone.Rotation;
+            Vector3 s = UseScale(track) ? track!.ScaleAt(frame, bone.Scale) : bone.Scale;
 
             if (r.LengthSquared() > 1e-8f)
                 r = Quaternion.Normalize(r);
@@ -190,9 +186,26 @@ public static class PoseEvaluator
         return world;
     }
 
-    /// <summary>Whether a channel carries motion worth using instead of the bind pose.</summary>
-    private static bool Animated<T>(T[]? values, bool oneKeyMeansUnset)
-        => values is not null && values.Length > (oneKeyMeansUnset ? 1 : 0);
+    /// <summary>
+    /// Заглушка одноключевого канала: identity-поворот / нулевой сдвиг / единичный
+    /// масштаб. Так дампер помечает "кость не трогалась" (у корня Чужого клип даёт
+    /// identity, хотя reference-поворот корня — разворот в CATHODE-пространство).
+    /// Любое другое одноключевое значение — реальная статическая поза.
+    /// </summary>
+    public static bool IsPlaceholder(Quaternion q)
+        => MathF.Abs(q.X) < 1e-6f && MathF.Abs(q.Y) < 1e-6f && MathF.Abs(q.Z) < 1e-6f && MathF.Abs(MathF.Abs(q.W) - 1f) < 1e-6f;
+    public static bool IsPlaceholder(Vector3 v) => v.LengthSquared() < 1e-12f;
+    public static bool IsPlaceholderScale(Vector3 v) => (v - Vector3.One).LengthSquared() < 1e-12f;
+
+    public static bool UseTranslation(TrackData? track)
+        => track is not null && track.Translation.Length > 0
+           && (track.Translation.Length > 1 || !IsPlaceholder(track.Translation[0]));
+    public static bool UseRotation(TrackData? track)
+        => track is not null && track.Rotation.Length > 0
+           && (track.Rotation.Length > 1 || !IsPlaceholder(track.Rotation[0]));
+    public static bool UseScale(TrackData? track)
+        => track is not null && track.Scale.Length > 0
+           && (track.Scale.Length > 1 || !IsPlaceholderScale(track.Scale[0]));
 
     /// <summary>
     /// Skinning matrices: inverse bind followed by the animated pose. Multiplying a

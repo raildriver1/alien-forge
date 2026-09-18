@@ -18,10 +18,12 @@ public sealed class ModelExportOptions
     public bool EmbedTextures { get; init; } = true;
 
     /// <summary>
-    /// The game's geometry is Z-up; glTF is Y-up. Applied as a node rotation so the
-    /// vertex data stays exactly as it was decoded.
+    /// Геометрия игры уже Y-up (как и в экспорте уровней), но левосторонняя (D3D);
+    /// glTF — правосторонний. Зеркалим Z у вершин, костей и анимаций и меняем обход
+    /// треугольников — ровно так же, как LevelExporter делает для уровней.
+    /// Раньше здесь стоял поворот −90° по X «из Z-up» — он клал модель на спину.
     /// </summary>
-    public bool ConvertZUpToYUp { get; init; } = true;
+    public bool MirrorZ { get; init; } = true;
 
     /// <summary>
     /// Write bone weights and a skin when a skeleton is supplied. Without it the
@@ -99,10 +101,15 @@ public static class ModelExporter
         // One glTF material per CATHODE material, textures decoded once and shared.
         var materialIndex = new Dictionary<Materials.Material, int>();
         var textureIndex = new Dictionary<Textures.TEX4, int>();
+        _mrCache.Clear(); // кэш MR-карт живёт в пределах одного экспорта
 
         SkeletonData? skeleton = options.ExportSkin ? animation?.Skeleton : null;
         if (skeleton is { Count: 0 })
             skeleton = null;
+        if (options.MirrorZ && skeleton is not null)
+            skeleton = MirrorSkeleton(skeleton);
+        if (options.MirrorZ && animation is not null)
+            animation = MirrorAnimation(animation, skeleton);
 
         // Skinned and static parts go into separate meshes. glTF ties a skin to the
         // node, so a node carrying a skin must not also hold primitives without bone
@@ -114,18 +121,40 @@ public static class ModelExporter
 
         foreach (var mesh in meshes)
         {
+            Vector3[] positions = mesh.Positions;
+            Vector3[]? normals = mesh.Normals;
+            Vector4[]? tangents = mesh.Tangents;
+            int[] indices = mesh.Indices;
+            if (options.MirrorZ)
+            {
+                positions = positions.Select(v => new Vector3(v.X, v.Y, -v.Z)).ToArray();
+                normals = normals?.Select(v => new Vector3(v.X, v.Y, -v.Z)).ToArray();
+                // знак W (направление бинормали) при зеркале меняется
+                tangents = tangents?.Select(v => new Vector4(v.X, v.Y, -v.Z, -v.W)).ToArray();
+                indices = new int[mesh.Indices.Length];
+                for (int i = 0; i + 2 < mesh.Indices.Length; i += 3)
+                {
+                    indices[i] = mesh.Indices[i];
+                    indices[i + 1] = mesh.Indices[i + 2];
+                    indices[i + 2] = mesh.Indices[i + 1];
+                }
+            }
             var attributes = new JsonObject
             {
-                ["POSITION"] = builder.AddPositions(mesh.Positions),
+                ["POSITION"] = builder.AddPositions(positions),
             };
-            if (mesh.Normals is { Length: > 0 })
-                attributes["NORMAL"] = builder.AddVec3(mesh.Normals);
-            if (mesh.Tangents is { Length: > 0 })
-                attributes["TANGENT"] = builder.AddVec4(mesh.Tangents);
+            if (normals is { Length: > 0 })
+                attributes["NORMAL"] = builder.AddVec3(normals);
+            if (tangents is { Length: > 0 })
+                attributes["TANGENT"] = builder.AddVec4(tangents);
             if (mesh.Uv0 is { Length: > 0 })
                 attributes["TEXCOORD_0"] = builder.AddVec2(mesh.Uv0);
             if (mesh.Uv1 is { Length: > 0 })
                 attributes["TEXCOORD_1"] = builder.AddVec2(mesh.Uv1);
+            if (mesh.Colors is { Length: > 0 })
+                attributes["COLOR_0"] = builder.AddVec4(mesh.Colors);
+            if (mesh.Colors1 is { Length: > 0 })
+                attributes["COLOR_1"] = builder.AddVec4(mesh.Colors1);
 
             bool useSkin = skeleton is not null && mesh.IsSkinned;
             if (mesh.IsSkinned)
@@ -142,7 +171,7 @@ public static class ModelExporter
             var primitive = new JsonObject
             {
                 ["attributes"] = attributes,
-                ["indices"] = builder.AddIndices(mesh.Indices),
+                ["indices"] = builder.AddIndices(indices),
                 ["mode"] = 4, // TRIANGLES
             };
 
@@ -174,28 +203,16 @@ public static class ModelExporter
         string modelName = model.Name ?? "model";
         string leaf = LeafName(modelName);
 
-        // -90 degrees about X, as a quaternion (x, y, z, w). Takes the game's Z-up
-        // geometry to the Y-up glTF expects.
-        JsonArray ZUpToYUp() => new() { -0.70710678f, 0f, 0f, 0.70710678f };
-
         var sceneRoots = new List<int>();
         int[]? boneNodes = null;
         bool writeSkin = skeleton is not null && skinnedPrimitives.Count > 0;
 
         if (writeSkin)
         {
-            // Two wrapper nodes above the rig, for reasons that both matter:
-            //
-            //  * the Havok-to-CATHODE correction cannot sit on the root bone, because
-            //    root bones get animated and the clip's raw values would overwrite it;
-            //  * the Z-up to Y-up rotation cannot sit on the mesh node, because glTF
-            //    ignores the transform of a node carrying a skin.
-            //
-            // Putting both above the joints means they reach the skinned vertices
-            // through the joint matrices instead.
+            // Two wrapper nodes above the rig: the Havok-to-CATHODE correction cannot
+            // sit on the root bone, because root bones get animated and the clip's raw
+            // values would overwrite it. The outer node is a plain root for the rig.
             var yUpNode = new JsonObject { ["name"] = leaf + "_root" };
-            if (options.ConvertZUpToYUp)
-                yUpNode["rotation"] = ZUpToYUp();
             int yUpIndex = builder.AddNode(yUpNode);
 
             var rigNode = new JsonObject { ["name"] = leaf + "_rig" };
@@ -258,8 +275,6 @@ public static class ModelExporter
                 ["name"] = name,
                 ["mesh"] = builder.AddMesh(name, staticPrimitives),
             };
-            if (options.ConvertZUpToYUp)
-                staticNode["rotation"] = ZUpToYUp();
             sceneRoots.Add(builder.AddNode(staticNode));
         }
 
@@ -399,30 +414,67 @@ public static class ModelExporter
                 });
             }
 
-            // Single-key channels are dropped, matching how the preview evaluates a
-            // pose: one key means the bone is not animated, and the bone node already
-            // holds the reference value. Honouring the placeholder instead would swing
-            // the whole rig, because the Alien's root arrives as an identity rotation
-            // while its reference pose carries the swap into CATHODE space.
-            int minimumKeys = clip.Frames > 1 ? 2 : 1;
-
-            foreach (var track in clip.Tracks)
+            // Одноключевые каналы: заглушки (identity / ноль / единица) пропускаем —
+            // узел кости уже держит reference-значение, а заглушка на корне Чужого
+            // развернула бы весь риг на 90°. Реальное одноключевое значение —
+            // статическая поза: пишем его константой на всю длину клипа (два ключа),
+            // иначе позы вроде ALIEN_COVERMAG_POSES вообще не попадали в файл
+            // ("ни одна кость не движется"). То же правило — у PoseEvaluator.
+            int constantKeys = clip.Frames > 1 ? 2 : 1;
+            float clipEnd = clip.Frames > 1 ? (clip.Frames - 1) / fps : 0f;
+            int constantTimes = -1;
+            int ConstantTimes()
             {
-                if (track.Bone < 0 || track.Bone >= skeleton.Count)
-                    continue;
-                int node = boneNodes[track.Bone];
+                if (constantTimes < 0)
+                    constantTimes = builder.AddTimes(constantKeys == 2 ? new[] { 0f, clipEnd } : new[] { 0f });
+                return constantTimes;
+            }
 
-                if (track.Translation.Length >= minimumKeys)
+            foreach (var rawTrack in clip.Tracks)
+            {
+                if (rawTrack.Bone < 0 || rawTrack.Bone >= skeleton.Count)
+                    continue;
+                int node = boneNodes[rawTrack.Bone];
+                // Корневая кость: в клипах её трек — дельта от reference-позы (в данных
+                // он почти всегда identity, даже в разворотах на 180°), а в bind у Чужого
+                // корень повёрнут на 180° вокруг (0,−1,1). Пишем как есть — и клипы с
+                // корневым треком ложатся на бок относительно клипов без него.
+                // Складываем с bind: R = Rbind·Rtrack, T = Tbind + Rbind·Ttrack.
+                // Аддитивные клипы — дельты (identity/0 на первом кадре), их не трогаем.
+                var track = rawTrack;
+                var rootBone = skeleton.Bones[rawTrack.Bone];
+                if (rootBone.Parent < 0 && !clip.IsAdditive)
+                {
+                    var rb = rootBone.Rotation;
+                    track = new TrackData
+                    {
+                        Bone = rawTrack.Bone,
+                        Translation = rawTrack.Translation.Select(t => rootBone.Translation + Vector3.Transform(t, rb)).ToArray(),
+                        Rotation = rawTrack.Rotation.Select(q => Quaternion.Normalize(Quaternion.Concatenate(q, rb))).ToArray(),
+                        Scale = rawTrack.Scale,
+                    };
+                }
+
+                if (track.Translation.Length > 1)
                     AddChannel(node, "translation", TimesFor(track.Translation.Length),
                         builder.AddVec3Output(track.Translation));
+                else if (PoseEvaluator.UseTranslation(track))
+                    AddChannel(node, "translation", ConstantTimes(),
+                        builder.AddVec3Output(Enumerable.Repeat(track.Translation[0], constantKeys).ToArray()));
 
-                if (track.Rotation.Length >= minimumKeys)
+                if (track.Rotation.Length > 1)
                     AddChannel(node, "rotation", TimesFor(track.Rotation.Length),
                         builder.AddQuaternionOutput(track.Rotation));
+                else if (PoseEvaluator.UseRotation(track))
+                    AddChannel(node, "rotation", ConstantTimes(),
+                        builder.AddQuaternionOutput(Enumerable.Repeat(track.Rotation[0], constantKeys).ToArray()));
 
-                if (track.Scale.Length >= minimumKeys)
+                if (track.Scale.Length > 1)
                     AddChannel(node, "scale", TimesFor(track.Scale.Length),
                         builder.AddVec3Output(track.Scale));
+                else if (PoseEvaluator.UseScale(track))
+                    AddChannel(node, "scale", ConstantTimes(),
+                        builder.AddVec3Output(Enumerable.Repeat(track.Scale[0], constantKeys).ToArray()));
             }
 
             if (channels.Count == 0)
@@ -436,10 +488,52 @@ public static class ModelExporter
             for (int n = 2; !usedNames.Add(name); n++)
                 name = $"{clip.Name}#{n}";
 
-            builder.AddAnimation(name, channels, samplers);
+            builder.AddAnimation(name, channels, samplers, clip.IsAdditive ? new JsonObject { ["additive"] = true, ["blendHint"] = clip.BlendHint } : null);
             written++;
         }
         return written;
+    }
+
+    // ---- зеркало Z (левосторонняя система игры → правосторонний glTF)
+    // Для локального преобразования M: M' = S·M·S, S = diag(1,1,−1):
+    //   перенос (x,y,z) → (x,y,−z); кватернион (x,y,z,w) → (−x,−y,z,w); масштаб без изменений.
+    private static readonly Matrix4x4 MirrorS = Matrix4x4.CreateScale(1f, 1f, -1f);
+    private static Vector3 MirrorV(Vector3 v) => new(v.X, v.Y, -v.Z);
+    private static Quaternion MirrorQ(Quaternion q) => new(-q.X, -q.Y, q.Z, q.W);
+
+    private static SkeletonData MirrorSkeleton(SkeletonData skeleton)
+    {
+        var bones = skeleton.Bones.Select(b => new BoneData
+        {
+            Name = b.Name,
+            Parent = b.Parent,
+            Translation = MirrorV(b.Translation),
+            Rotation = MirrorQ(b.Rotation),
+            Scale = b.Scale,
+        }).ToList();
+        return new SkeletonData { Bones = bones, Correction = MirrorS * skeleton.Correction * MirrorS };
+    }
+
+    private static AnimationBundle MirrorAnimation(AnimationBundle bundle, SkeletonData? skeleton)
+    {
+        var clips = bundle.Clips.Select(c => new ClipData
+        {
+            Name = c.Name,
+            Index = c.Index,
+            Container = c.Container,
+            Duration = c.Duration,
+            Frames = c.Frames,
+            Fps = c.Fps,
+            BlendHint = c.BlendHint,
+            Tracks = c.Tracks.Select(t => new TrackData
+            {
+                Bone = t.Bone,
+                Translation = t.Translation.Select(MirrorV).ToArray(),
+                Rotation = t.Rotation.Select(MirrorQ).ToArray(),
+                Scale = t.Scale,
+            }).ToList(),
+        }).ToList();
+        return new AnimationBundle { Skeleton = skeleton ?? bundle.Skeleton, Clips = clips, Fps = bundle.Fps };
     }
 
     private static bool QuaternionClose(Quaternion a, Quaternion b)
@@ -465,9 +559,8 @@ public static class ModelExporter
         if (materialIndex.TryGetValue(material, out int existing))
             return existing;
 
-        // The material is read as a shader first: every texture's job comes from the
-        // bracketed letter in its name, so the wiring is recovered rather than guessed
-        // slot by slot.
+        // Материал читается как шейдер: роль каждой текстуры — по привязке сэмплера
+        // убершейдера (DIFFUSE_MAP, NORMAL_MAP...), см. ShaderLayout.
         var layout = ShaderLayout.Read(material);
 
         var pbr = new JsonObject();
@@ -477,6 +570,8 @@ public static class ModelExporter
             ["doubleSided"] = true,
             ["pbrMetallicRoughness"] = pbr,
         };
+        var tint = layout.DiffuseTint;
+        bool keepAlpha = layout.Transparent || layout.Cutout;
 
         int? Embed(TextureRole role)
         {
@@ -488,9 +583,21 @@ public static class ModelExporter
 
         int? baseColor = Embed(TextureRole.Diffuse) ?? Embed(TextureRole.Colour);
         if (baseColor is not null)
-            pbr["baseColorTexture"] = new JsonObject { ["index"] = baseColor.Value };
+        {
+            var baseTex = new JsonObject { ["index"] = baseColor.Value };
+            if (Math.Abs(layout.DiffuseUvMult - 1f) > 1e-4f)
+                baseTex["extensions"] = new JsonObject
+                {
+                    ["KHR_texture_transform"] = new JsonObject
+                    {
+                        ["scale"] = new JsonArray { layout.DiffuseUvMult, layout.DiffuseUvMult },
+                    },
+                };
+            pbr["baseColorTexture"] = baseTex;
+            pbr["baseColorFactor"] = new JsonArray { tint.X, tint.Y, tint.Z, keepAlpha ? tint.W : 1f };
+        }
         else
-            pbr["baseColorFactor"] = new JsonArray { 0.5f, 0.5f, 0.52f, 1.0f };
+            pbr["baseColorFactor"] = new JsonArray { tint.X, tint.Y, tint.Z, keepAlpha ? tint.W : 1f };
 
         int? normalMap = Embed(TextureRole.Normal);
         if (normalMap is not null)
@@ -501,7 +608,16 @@ public static class ModelExporter
         // rather than dropped. Blender shows it on Metallic and Roughness, which is
         // where a texture artist expects to find it, and the honest description of what
         // it really is goes into extras alongside.
-        int? specularMap = Embed(TextureRole.Specular);
+        // Spec-карта игры — не metallicRoughness glTF: в её B лежит не металл, а
+        // маска (у CA_CHARACTER — шероховатость диффуза, у кожи — маска нормалей),
+        // и сырая карта делала половину поверхностей металлическими — они
+        // отражали HDRI Blender и синели. Собираем правильную MR-карту:
+        //   R = блик F0 (spec.r × SPECULAR_TINT), G = roughness = 1 − spec.g × SPECULAR_POWER,
+        //   B = металл только при SPECULAR_MAPPING_METALNESS_MASKING, иначе 0.
+        int? specularMap = null;
+        var specSlot = layout.First(TextureRole.Specular);
+        if (options.EmbedTextures && specSlot?.Texture is not null)
+            specularMap = EmbedMetallicRoughness(builder, specSlot.Texture, layout, textureIndex, warnings);
         if (specularMap is not null)
         {
             pbr["metallicRoughnessTexture"] = new JsonObject { ["index"] = specularMap.Value };
@@ -511,7 +627,7 @@ public static class ModelExporter
         else
         {
             pbr["metallicFactor"] = 0.0f;
-            pbr["roughnessFactor"] = 0.6f;
+            pbr["roughnessFactor"] = Math.Clamp(1.0f - 0.5f * layout.Param("SPECULAR_POWER", 1.0f), 0.05f, 1.0f);
         }
 
         int? occlusion = Embed(TextureRole.Occlusion);
@@ -524,40 +640,135 @@ public static class ModelExporter
             gltfMaterial["emissiveTexture"] = new JsonObject { ["index"] = emissive.Value };
             gltfMaterial["emissiveFactor"] = new JsonArray { 1.0f, 1.0f, 1.0f };
         }
+        else
+        {
+            // Фича EMISSIVE: светится сам диффуз (лампы, экраны, надписи)
+            var (ec, es) = layout.Emission();
+            if (es > 0f)
+            {
+                if (baseColor is not null)
+                    gltfMaterial["emissiveTexture"] = new JsonObject { ["index"] = baseColor.Value };
+                gltfMaterial["emissiveFactor"] = new JsonArray { ec.X, ec.Y, ec.Z };
+                gltfMaterial["extensions"] = new JsonObject
+                {
+                    ["KHR_materials_emissive_strength"] = new JsonObject { ["emissiveStrength"] = Math.Max(1f, es * 4f) },
+                };
+                builder.UseExtension("KHR_materials_emissive_strength");
+            }
+        }
 
-        // An opacity map means the surface is meant to be cut out, and saying so is
-        // what stops hair and grilles importing as solid slabs.
-        if (layout.First(TextureRole.Opacity) is not null)
+        // Режим альфы — по флагам шейдера (как в просмотрщике OpenCAGE): стекло и
+        // декали блендятся, ALPHA_TEST режется; карта opacity без флагов — тоже вырез,
+        // иначе волосы и решётки импортируются сплошными плитами.
+        if (layout.Transparent)
+            gltfMaterial["alphaMode"] = "BLEND";
+        else if (layout.Cutout || layout.First(TextureRole.Opacity) is not null)
         {
             gltfMaterial["alphaMode"] = "MASK";
-            gltfMaterial["alphaCutoff"] = 0.5f;
+            gltfMaterial["alphaCutoff"] = layout.AlphaCutoff;
         }
+        gltfMaterial["doubleSided"] = layout.DoubleSided || layout.Ubershader is null;
 
         // Whatever glTF has no slot for is still written down: nothing about the source
         // material goes missing, so a shader can be rebuilt by hand from the export.
+        // Для переноса 1:1 в Blender кладём в файл и карты без своего glTF-слота
+        // (AO, грязь, маски, вторичные normal/spec...): скрипт alienforge_blender.py
+        // подключает их по extras. Кубические карты и LUT'ы пропускаем.
+        if (options.EmbedTextures)
+            foreach (var slot in layout.Slots)
+            {
+                if (slot.SamplerName is null || slot.Texture is null) continue;
+                if (slot.Role is TextureRole.Environment) continue;
+                if (slot.SamplerName is "CONVOLVED_BRDF_MAX_HACK" or "IRRADIANCE_CUBE_MAP" or "ENVIRONMENT_MAP") continue;
+                EmbedTexture(builder, slot.Texture, textureIndex, warnings);
+            }
+
         var channels = new JsonArray();
         foreach (var slot in layout.Slots)
+        {
+            var ch = layout.ChannelsOf(slot);
             channels.Add(new JsonObject
             {
                 ["slot"] = slot.Index,
                 ["role"] = slot.Role.ToString(),
                 ["roleName"] = slot.RoleName,
                 ["texture"] = slot.TextureName,
+                ["sampler"] = slot.SamplerName,
                 ["gltfTarget"] = slot.GltfTarget,
+                ["image"] = slot.Texture is not null && textureIndex.TryGetValue(slot.Texture, out int ti) ? ti : null,
+                ["R"] = ch.R, ["G"] = ch.G, ["B"] = ch.B, ["A"] = ch.A,
+                ["blender"] = ch.Blender,
             });
+        }
+        var features = new JsonArray();
+        foreach (var f in layout.Features) features.Add(f);
+        var parameters = new JsonObject();
+        foreach (var kv in layout.Parameters)
+        {
+            var arr = new JsonArray();
+            foreach (var v in kv.Value) arr.Add(v);
+            parameters[kv.Key] = arr;
+        }
 
-        gltfMaterial["extras"] = new JsonObject
+        var extras = new JsonObject
         {
             ["shader"] = channels,
+            ["features"] = features,
+            ["params"] = parameters,
+            ["alpha"] = layout.Transparent ? "BLEND" : layout.Cutout ? "MASK" : "OPAQUE",
+            ["ubershader"] = layout.Ubershader,
             ["environmentMapIndex"] = material.EnvironmentMapIndex,
             ["physicalMaterialIndex"] = material.PhysicalMaterialIndex,
             ["specularIsGameSpecular"] = specularMap is not null,
             ["note"] = "specular карта игры записана в metallicRoughness: своего слота " +
                        "для неё в glTF нет",
         };
+        // Импортёр Blender не всегда доносит вложенные extras (списки строк,
+        // списки объектов) — дублируем всё одной JSON-строкой для alienforge_blender.py
+        extras["features_csv"] = string.Join(",", layout.Features);
+        extras["alienforge_json"] = extras.ToJsonString();
+        gltfMaterial["extras"] = extras;
 
         int index = builder.AddMaterial(gltfMaterial);
         materialIndex[material] = index;
+        return index;
+    }
+
+    /// <summary>
+    /// MR-карта из spec-карты игры (см. комментарий у metallicRoughnessTexture).
+    /// Кэшируется отдельно от сырой карты: та тоже кладётся в файл для скрипта Blender.
+    /// </summary>
+    private static readonly Dictionary<(Textures.TEX4, string), int> _mrCache = new();
+    private static int? EmbedMetallicRoughness(GltfBuilder builder, Textures.TEX4 tex, ShaderLayout layout,
+        Dictionary<Textures.TEX4, int> cache, List<string> warnings)
+    {
+        float tint = layout.Param("SPECULAR_TINT", 1.0f);
+        if (layout.Ubershader == "CA_SKIN") tint *= 0.28f; // кодировка блика кожи: F0 = 0.28·spec
+        float power = layout.Param("SPECULAR_POWER", 1.0f);
+        bool metal = layout.HasFeature("SPECULAR_MAPPING_METALNESS_MASKING");
+        string key = $"{tint:0.###}|{power:0.###}|{metal}";
+        if (_mrCache.TryGetValue((tex, key), out int existing))
+            return existing;
+        var result = TextureDecoder.Decode(tex);
+        if (!result.Ok)
+        {
+            warnings.Add($"spec-текстура '{tex.Name}' пропущена: {result.Error}");
+            return null;
+        }
+        var src = result.Image!;
+        var mr = new RgbaImage(src.Width, src.Height);
+        for (int i = 0; i < src.Pixels.Length; i += 4)
+        {
+            float r = src.Pixels[i] / 255f, g = src.Pixels[i + 1] / 255f, b = src.Pixels[i + 2] / 255f;
+            mr.Pixels[i] = (byte)Math.Clamp(r * tint * 255f, 0, 255);
+            mr.Pixels[i + 1] = (byte)Math.Clamp((1f - Math.Min(g * power, 0.999f)) * 255f, 0, 255);
+            mr.Pixels[i + 2] = (byte)(metal ? Math.Clamp(b * 255f, 0, 255) : 0);
+            mr.Pixels[i + 3] = 255;
+        }
+        byte[] png = PngEncoder.Encode(mr);
+        int image = builder.AddPngImage(png, (tex.Name ?? "spec") + "#mr");
+        int index = builder.AddTexture(image);
+        _mrCache[(tex, key)] = index;
         return index;
     }
 

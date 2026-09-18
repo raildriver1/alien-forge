@@ -40,6 +40,13 @@
         <Separator />
         <MenuItem Header="{Binding [MENU_EXPORT_LEVEL], Source={x:Static local:Loc.Current}}"
                   Click="OnExportLevel" />
+        <MenuItem Header="{Binding [MENU_EXPORT_SCENE], Source={x:Static local:Loc.Current}}"
+                  Click="OnExportScene" />
+      </MenuItem>
+
+      <MenuItem Header="{Binding [MENU_UI], Source={x:Static local:Loc.Current}}">
+        <MenuItem Header="{Binding [MENU_UI_BROWSE], Source={x:Static local:Loc.Current}}"
+                  Click="OnBrowseUi" />
       </MenuItem>
 
       <MenuItem Header="{Binding [MENU_VIEW], Source={x:Static local:Loc.Current}}">
@@ -461,9 +468,11 @@
                           <ColumnDefinition Width="Auto" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Grid.Column="0" Text="{Binding ShortName}"
-                                   Style="{StaticResource Mono}" TextTrimming="CharacterEllipsis" />
-                        <TextBlock Grid.Column="1" Text="{Binding SizeText}"
-                                   Style="{StaticResource Dim}" Margin="12,0,4,0" />
+                                   Style="{StaticResource Mono}" TextTrimming="CharacterEllipsis"
+                                   ToolTip="{Binding FullName}" />
+                        <TextBlock Grid.Column="1" Text="{Binding Folder}"
+                                   Style="{StaticResource Dim}" Margin="12,0,4,0"
+                                   TextTrimming="CharacterEllipsis" MaxWidth="260" />
                       </Grid>
                     </DataTemplate>
                   </ListBox.ItemTemplate>
